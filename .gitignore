@@ -1,0 +1,9 @@
+docs/private/
+.env
+*.db
+*.db-wal
+*.db-shm
+blobs/
+.venv/
+__pycache__/
+.idea/
