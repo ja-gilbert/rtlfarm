@@ -1,0 +1,32 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.0.1
+        with:
+          enable-cache: true
+      - name: Install (locked)
+        run: uv sync --frozen
+      - name: Private files are not tracked
+        run: bash scripts/check-private.sh
+      - name: Lint
+        run: uv run ruff check .
+      - name: Format
+        run: uv run ruff format --check .
+      - name: Types
+        run: uv run mypy --strict src tests
+      - name: Unit tests
+        run: uv run pytest tests/unit
+      - name: Entry point
+        run: uv run rtlfarm --help

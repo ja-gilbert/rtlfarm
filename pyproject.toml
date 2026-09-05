@@ -1,0 +1,44 @@
+[project]
+name = "rtlfarm"
+version = "0.1.0.dev0"
+description = "A small hardware regression farm: a control plane, pull-based workers, leases, and a content-addressed cache."
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+dependencies = []
+
+[project.scripts]
+rtlfarm = "rtlfarm.cli:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1",
+    "pytest-timeout>=2.4",
+    "hypothesis>=6.167",
+    "ruff>=0.16",
+    "mypy>=2.3",
+]
+
+[build-system]
+requires = ["uv_build>=0.12,<0.13"]
+build-backend = "uv_build"
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.mypy]
+strict = true
+python_version = "3.12"
+files = ["src", "tests"]
+warn_unreachable = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+timeout = 30
+addopts = "-ra"
+filterwarnings = ["error"]

@@ -1,0 +1,29 @@
+# rtlfarm configuration. Committed and non-secret.
+#
+# Precedence, lowest to highest: built-in defaults -> this file -> RTLFARM_*
+# environment variables (RTLFARM_TIMING__LEASE_TTL_S nests into [timing]) ->
+# CLI flags. Secrets (the bearer tokens) never go here; they live in the
+# gitignored .env (see .env.example).
+#
+# Every value below is the built-in default, written out so the timing profile
+# in force is visible in one place. Orderings between the timing constants are
+# checked at startup by validate_timing().
+
+[timing]
+tick_s = 1.0                  # scheduler period
+heartbeat_s = 5               # worker heartbeat period
+lease_ttl_s = 30              # lease lifetime from claim or last renewal
+backstop_grace_s = 15         # added to a task's timeout_s before the control-plane backstop fires
+worker_dead_after_s = 90      # heartbeat silence before a worker row is DEAD
+kill_grace_s = 5              # SIGTERM -> SIGKILL
+claim_wait_s = 20             # long-poll ceiling
+client_read_timeout_s = 30    # HTTP client timeout on the worker
+requeue_backoff_s = [0, 5, 30] # not_before schedule by retry counter
+full_sweep_every = 30         # ticks between readiness self-heals
+readyz_tick_factor = 3        # /readyz fails when the last good tick is older than this x tick_s
+
+[toolchain]
+# digest = "<sha256 of toolchain-manifest.json>"   # usually pinned via .env by `rtlfarm dev pin-toolchain`
+
+# control_url = "http://127.0.0.1:8080"   # where the CLI and workers reach the control plane
+# insecure_bind = false                   # allow a non-loopback bind with auth disabled

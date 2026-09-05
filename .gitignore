@@ -7,3 +7,8 @@ blobs/
 .venv/
 __pycache__/
 .idea/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+dist/
