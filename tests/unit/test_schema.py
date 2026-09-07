@@ -109,7 +109,7 @@ def _lease(conn: sqlite3.Connection, task_id: str = "task-1") -> None:
         """
         UPDATE tasks
         SET state = 'LEASED', leased_by = 'worker-1', lease_attempt_id = 'att-1',
-            lease_expires_at_ms = 5_000, leased_at_ms = 2_000, attempt = 1
+            lease_expires_at_ms = 5000, leased_at_ms = 2000, attempt = 1
         WHERE task_id = :task_id
         """,
         {"task_id": task_id},
@@ -163,7 +163,7 @@ def test_leaving_leased_without_clearing_the_lease_is_rejected(
     _lease(db)
     with pytest.raises(sqlite3.IntegrityError, match="CHECK constraint failed"):
         db.execute(
-            "UPDATE tasks SET state = 'READY', requeued_at_ms = 6_000 "
+            "UPDATE tasks SET state = 'READY', requeued_at_ms = 6000 "
             "WHERE task_id = 'task-1'"
         )
     assert _task_state(db) == "LEASED"
@@ -175,7 +175,7 @@ def test_terminal_state_with_leftover_lease_is_rejected(db: sqlite3.Connection) 
     _lease(db)
     with pytest.raises(sqlite3.IntegrityError, match="CHECK constraint failed"):
         db.execute(
-            "UPDATE tasks SET state = 'SUCCEEDED', finished_at_ms = 6_000 "
+            "UPDATE tasks SET state = 'SUCCEEDED', finished_at_ms = 6000 "
             "WHERE task_id = 'task-1'"
         )
     assert _task_state(db) == "LEASED"
@@ -190,7 +190,7 @@ def test_leaving_leased_with_the_full_null_list_is_accepted(
     db.execute(
         """
         UPDATE tasks
-        SET state = 'READY', requeued_at_ms = 6_000, leased_by = NULL,
+        SET state = 'READY', requeued_at_ms = 6000, leased_by = NULL,
             lease_attempt_id = NULL, lease_expires_at_ms = NULL,
             leased_at_ms = NULL, started_at_ms = NULL
         WHERE task_id = 'task-1'
