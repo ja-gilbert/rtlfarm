@@ -1,0 +1,40 @@
+# The fake workload: two stages over the fake tool, one data file per target.
+# Every fast- and process-tier scenario runs this pack.
+version: 1
+design:
+  name: fake_smoke
+  files:
+    rtl: ["src/*.txt"]
+    tb: ["tb/*.txt"]
+    data: ["data/*.txt"]
+  params: {artifact_bytes: 64}
+toolchain: {digest: null}
+targets:
+  - name: t_a
+    top: t_a
+    tb: ["tb/t_a.txt"]
+    data: ["data/t_a.txt"]
+    seeds: {n: 2, base: 1}
+    tags: [smoke, nightly]
+    timeout_sim: 1ms
+    params: {result: pass, sleep_ms: 10}
+  - name: t_b
+    top: t_b
+    tb: ["tb/t_b.txt"]
+    data: ["data/t_b.txt"]
+    seeds: {n: 3, base: 100}
+    tags: [nightly]
+    timeout_sim: 1ms
+    params: {result: pass, sleep_ms: 50}
+stages:
+  compile: {tool: fake, consumes: [rtl, tb], per_target: true, timeout_s: 30}
+  simulate:
+    tool: fake
+    consumes: [data]
+    consumes_artifacts: [compiled]
+    depends_on: [compile]
+    fan_out: targets
+    timeout_s: 30
+policies:
+  retries: {infra: 3, timeout: 0, tool_error: 1}
+  cache: {compile: true, simulate: true}

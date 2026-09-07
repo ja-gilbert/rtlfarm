@@ -1,0 +1,36 @@
+version: 1
+design:
+  name: counter
+  files:
+    rtl: ["rtl/*.sv"]
+    include: ["tb/rtlfarm_tb.svh"]
+    tb: ["tb/tb_*.sv"]
+  include_dirs: ["tb"]
+  params: {WIDTH: 8}
+  timescale: "1ns/1ps"
+toolchain: {digest: null}
+targets:
+  - name: tb_counter
+    top: tb_counter
+    tb: ["tb/tb_counter.sv"]
+    seeds: {n: 3, base: 1}
+    tags: [smoke, nightly]
+    timeout_sim: 10ms
+stages:
+  lint: {tool: iverilog, consumes: [rtl, include], timeout_s: 60}
+  compile:
+    tool: iverilog
+    consumes: [rtl, include, tb]
+    depends_on: [lint]
+    per_target: true
+    timeout_s: 120
+  simulate:
+    tool: iverilog
+    consumes: []
+    consumes_artifacts: [compiled]
+    depends_on: [compile]
+    fan_out: targets
+    timeout_s: 120
+policies:
+  retries: {infra: 3, timeout: 0, tool_error: 1}
+  cache: {lint: true, compile: true, simulate: true}

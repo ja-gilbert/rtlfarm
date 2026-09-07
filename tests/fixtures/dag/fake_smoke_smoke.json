@@ -1,0 +1,337 @@
+{
+  "dependencies": [
+    [
+      "01J0000000000000000000ABCD.simulate.t_a.s1",
+      "01J0000000000000000000ABCD.compile.t_a.s0",
+      "success"
+    ],
+    [
+      "01J0000000000000000000ABCD.simulate.t_a.s2",
+      "01J0000000000000000000ABCD.compile.t_a.s0",
+      "success"
+    ]
+  ],
+  "design": "fake_smoke",
+  "job_id": "01J0000000000000000000ABCD",
+  "manifest": {
+    "design": "fake_smoke",
+    "files": [
+      {
+        "ordinal": 0,
+        "path": "src/design.txt",
+        "role": "rtl",
+        "sha256": "148481a8a4e398450f5cde115500dafe33ece1cd38461f40bd57a32e85541946",
+        "size": 72
+      },
+      {
+        "ordinal": 0,
+        "path": "tb/t_a.txt",
+        "role": "tb",
+        "sha256": "6de820021543e7fdb36a52736230fa0f52c64d33fdaf3682d5e2ccebd4d51804",
+        "size": 30
+      },
+      {
+        "ordinal": 1,
+        "path": "tb/t_b.txt",
+        "role": "tb",
+        "sha256": "e2dca2701a4dacaacd14e4d6ea76cc53a7d17120fa1166587f09ac0451b33bba",
+        "size": 30
+      },
+      {
+        "ordinal": 0,
+        "path": "data/t_a.txt",
+        "role": "data",
+        "sha256": "758c7dfdace15131c71ebecde2557b5924c0a2ff354ec1ab445e7f39a93d80cf",
+        "size": 13
+      },
+      {
+        "ordinal": 1,
+        "path": "data/t_b.txt",
+        "role": "data",
+        "sha256": "6db7a98748d24f591c1598e197a51f3b7a09ede701b3860cc2e5a65014d1ccc3",
+        "size": 13
+      }
+    ],
+    "manifest_version": 1,
+    "pipeline": {
+      "design": {
+        "defines": {},
+        "files": {
+          "data": [
+            "data/*.txt"
+          ],
+          "rtl": [
+            "src/*.txt"
+          ],
+          "tb": [
+            "tb/*.txt"
+          ]
+        },
+        "include_dirs": [],
+        "name": "fake_smoke",
+        "params": {
+          "artifact_bytes": 64
+        },
+        "timescale": null
+      },
+      "policies": {
+        "cache": {
+          "compile": true,
+          "simulate": true
+        },
+        "retries": {
+          "infra": 3,
+          "timeout": 0,
+          "tool_error": 1
+        }
+      },
+      "stages": {
+        "compile": {
+          "consumes": [
+            "rtl",
+            "tb"
+          ],
+          "consumes_artifacts": [
+            "compiled"
+          ],
+          "depends_on": [],
+          "fan_out": null,
+          "per_target": true,
+          "timeout_s": 30,
+          "tool": "fake"
+        },
+        "simulate": {
+          "consumes": [
+            "data"
+          ],
+          "consumes_artifacts": [
+            "compiled"
+          ],
+          "depends_on": [
+            "compile"
+          ],
+          "fan_out": "targets",
+          "per_target": false,
+          "timeout_s": 30,
+          "tool": "fake"
+        }
+      },
+      "targets": [
+        {
+          "allow_zero_time": false,
+          "data": [
+            "data/t_a.txt"
+          ],
+          "defines": {},
+          "name": "t_a",
+          "params": {
+            "result": "pass",
+            "sleep_ms": 10
+          },
+          "plusargs": {},
+          "seeds": [
+            1,
+            2
+          ],
+          "tags": [
+            "smoke",
+            "nightly"
+          ],
+          "tb": [
+            "tb/t_a.txt"
+          ],
+          "timeout_s": null,
+          "timeout_sim": "1ms",
+          "top": "t_a"
+        },
+        {
+          "allow_zero_time": false,
+          "data": [
+            "data/t_b.txt"
+          ],
+          "defines": {},
+          "name": "t_b",
+          "params": {
+            "result": "pass",
+            "sleep_ms": 50
+          },
+          "plusargs": {},
+          "seeds": [
+            100,
+            101,
+            102
+          ],
+          "tags": [
+            "nightly"
+          ],
+          "tb": [
+            "tb/t_b.txt"
+          ],
+          "timeout_s": null,
+          "timeout_sim": "1ms",
+          "top": "t_b"
+        }
+      ],
+      "toolchain": {
+        "digest": null
+      },
+      "version": 1
+    }
+  },
+  "manifest_digest": "19e1aa7675b12537bc32597d837ea2c98cf5bd119b97b31237d950ef4e02aff0",
+  "selection": {
+    "seed": null,
+    "seeds": null,
+    "tags": [
+      "smoke"
+    ],
+    "targets": []
+  },
+  "submission_hash": "58cd5856f1b4b4e5e55be319760a75c2a190c1ee90bfda3c414d5999a8fb25d5",
+  "tasks": [
+    {
+      "affects_verdict": true,
+      "bypass_cache": false,
+      "cacheable": true,
+      "consumes_artifacts": [
+        "compiled"
+      ],
+      "depends_on": [],
+      "max_infra": 3,
+      "max_timeout": 0,
+      "max_tool_error": 1,
+      "params": {
+        "allow_zero_time": false,
+        "consumes": [
+          "rtl",
+          "tb"
+        ],
+        "data": [
+          "data/t_a.txt"
+        ],
+        "defines": {},
+        "include_dirs": [],
+        "inputs": [
+          "src/design.txt",
+          "tb/t_a.txt"
+        ],
+        "params": {
+          "artifact_bytes": 64,
+          "result": "pass",
+          "sleep_ms": 10
+        },
+        "plusargs": {},
+        "tb": [
+          "tb/t_a.txt"
+        ],
+        "timeout_sim": "1ms",
+        "timescale": null,
+        "top": "t_a"
+      },
+      "priority": 5,
+      "seed": 0,
+      "stage_kind": "compile",
+      "target": "t_a",
+      "task_id": "01J0000000000000000000ABCD.compile.t_a.s0",
+      "timeout_s": 30,
+      "tool": "fake",
+      "toolchain_digest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    },
+    {
+      "affects_verdict": true,
+      "bypass_cache": false,
+      "cacheable": true,
+      "consumes_artifacts": [
+        "compiled"
+      ],
+      "depends_on": [
+        "01J0000000000000000000ABCD.compile.t_a.s0"
+      ],
+      "max_infra": 3,
+      "max_timeout": 0,
+      "max_tool_error": 1,
+      "params": {
+        "allow_zero_time": false,
+        "consumes": [
+          "data"
+        ],
+        "data": [
+          "data/t_a.txt"
+        ],
+        "defines": {},
+        "include_dirs": [],
+        "inputs": [
+          "data/t_a.txt"
+        ],
+        "params": {
+          "artifact_bytes": 64,
+          "result": "pass",
+          "sleep_ms": 10
+        },
+        "plusargs": {},
+        "tb": [
+          "tb/t_a.txt"
+        ],
+        "timeout_sim": "1ms",
+        "timescale": null,
+        "top": "t_a"
+      },
+      "priority": 5,
+      "seed": 1,
+      "stage_kind": "simulate",
+      "target": "t_a",
+      "task_id": "01J0000000000000000000ABCD.simulate.t_a.s1",
+      "timeout_s": 30,
+      "tool": "fake",
+      "toolchain_digest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    },
+    {
+      "affects_verdict": true,
+      "bypass_cache": false,
+      "cacheable": true,
+      "consumes_artifacts": [
+        "compiled"
+      ],
+      "depends_on": [
+        "01J0000000000000000000ABCD.compile.t_a.s0"
+      ],
+      "max_infra": 3,
+      "max_timeout": 0,
+      "max_tool_error": 1,
+      "params": {
+        "allow_zero_time": false,
+        "consumes": [
+          "data"
+        ],
+        "data": [
+          "data/t_a.txt"
+        ],
+        "defines": {},
+        "include_dirs": [],
+        "inputs": [
+          "data/t_a.txt"
+        ],
+        "params": {
+          "artifact_bytes": 64,
+          "result": "pass",
+          "sleep_ms": 10
+        },
+        "plusargs": {},
+        "tb": [
+          "tb/t_a.txt"
+        ],
+        "timeout_sim": "1ms",
+        "timescale": null,
+        "top": "t_a"
+      },
+      "priority": 5,
+      "seed": 2,
+      "stage_kind": "simulate",
+      "target": "t_a",
+      "task_id": "01J0000000000000000000ABCD.simulate.t_a.s2",
+      "timeout_s": 30,
+      "tool": "fake",
+      "toolchain_digest": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+    }
+  ]
+}
