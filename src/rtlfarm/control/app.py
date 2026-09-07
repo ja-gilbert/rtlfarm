@@ -90,9 +90,11 @@ def create_app(config: Config, db: Database, blobs: BlobStore, clock: Clock) -> 
     app.add_exception_handler(ApiError, _api_error)
     app.add_exception_handler(HTTPException, _http_error)
     app.add_exception_handler(RequestValidationError, _validation_error)
+    from rtlfarm.control.routes import blobs as blob_routes
     from rtlfarm.control.routes import infra
 
     app.include_router(infra.router)
+    app.include_router(blob_routes.router)
     return app
 
 
@@ -146,8 +148,18 @@ def worker_auth(request: Request) -> None:
     _check(request, services(request).config.worker_token)
 
 
+def any_auth(request: Request) -> None:
+    """Dependency for the blob routes, which clients and workers both use."""
+    config = services(request).config
+    try:
+        _check(request, config.client_token)
+    except ApiError:
+        _check(request, config.worker_token)
+
+
 ClientAuth = Annotated[None, Depends(client_auth)]
 WorkerAuth = Annotated[None, Depends(worker_auth)]
+AnyAuth = Annotated[None, Depends(any_auth)]
 
 
 def _envelope(status: int, code: str, message: str, details: object) -> JSONResponse:
