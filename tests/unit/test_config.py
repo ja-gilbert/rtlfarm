@@ -12,6 +12,7 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from rtlfarm.config import (
+    BlobsConfig,
     Config,
     ConfigError,
     TimingConfig,
@@ -56,7 +57,17 @@ ROUND_TRIP: list[tuple[str, str, str, object]] = [
     ("timing.requeue_backoff_s", "[1, 2, 3]", "[1, 2, 3]", (1.0, 2.0, 3.0)),
     ("timing.full_sweep_every", "7", "7", 7),
     ("timing.readyz_tick_factor", "4", "4", 4),
+    ("timing.upload_timeout_s", "45", "45", 45.0),
     ("toolchain.digest", '"0123abcd"', "0123abcd", "0123abcd"),
+    ("blobs.log_bytes", "1", "1", 1),
+    ("blobs.input_file_bytes", "2", "2", 2),
+    ("blobs.input_job_bytes", "3", "3", 3),
+    ("blobs.diagnostics_bytes", "4", "4", 4),
+    ("blobs.deps_bytes", "5", "5", 5),
+    ("blobs.compiled_bytes", "6", "6", 6),
+    ("blobs.result_bytes", "7", "7", 7),
+    ("blobs.waveform_bytes", "8", "8", 8),
+    ("blobs.coverage_bytes", "9", "9", 9),
     ("client_token", '"client-secret"', "client-secret", "client-secret"),
     ("worker_token", '"worker-secret"', "worker-secret", "worker-secret"),
     ("insecure_bind", "true", "1", True),
@@ -104,8 +115,20 @@ def test_defaults_match_spec_table() -> None:
         requeue_backoff_s=(0.0, 5.0, 30.0),
         full_sweep_every=30,
         readyz_tick_factor=3,
+        upload_timeout_s=300.0,
     )
     assert config.toolchain.digest is None
+    assert config.blobs == BlobsConfig(
+        log_bytes=16 * 1024 * 1024,
+        input_file_bytes=64 * 1024 * 1024,
+        input_job_bytes=512 * 1024 * 1024,
+        diagnostics_bytes=4 * 1024 * 1024,
+        deps_bytes=4 * 1024 * 1024,
+        compiled_bytes=256 * 1024 * 1024,
+        result_bytes=1024 * 1024,
+        waveform_bytes=512 * 1024 * 1024,
+        coverage_bytes=64 * 1024 * 1024,
+    )
     assert config.client_token is None
     assert config.worker_token is None
     assert config.insecure_bind is False
@@ -385,6 +408,7 @@ def test_no_timeouts_means_no_timeout_checks() -> None:
         "kill_grace_s",
         "claim_wait_s",
         "client_read_timeout_s",
+        "upload_timeout_s",
     ],
 )
 @pytest.mark.parametrize("bad", [0.0, -1.0])

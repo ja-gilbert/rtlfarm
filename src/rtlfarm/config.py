@@ -59,6 +59,7 @@ class TimingConfig:
     requeue_backoff_s: tuple[float, ...] = (0.0, 5.0, 30.0)
     full_sweep_every: int = 30
     readyz_tick_factor: int = 3
+    upload_timeout_s: float = 300.0
 
 
 @dataclass(frozen=True)
@@ -68,10 +69,29 @@ class ToolchainConfig:
     digest: str | None = None
 
 
+_MIB = 1024 * 1024
+
+
+@dataclass(frozen=True)
+class BlobsConfig:
+    """Size caps per blob kind, in bytes, enforced while an upload streams in."""
+
+    log_bytes: int = 16 * _MIB
+    input_file_bytes: int = 64 * _MIB
+    input_job_bytes: int = 512 * _MIB
+    diagnostics_bytes: int = 4 * _MIB
+    deps_bytes: int = 4 * _MIB
+    compiled_bytes: int = 256 * _MIB
+    result_bytes: int = 1 * _MIB
+    waveform_bytes: int = 512 * _MIB
+    coverage_bytes: int = 64 * _MIB
+
+
 @dataclass(frozen=True)
 class Config:
     timing: TimingConfig = field(default_factory=TimingConfig)
     toolchain: ToolchainConfig = field(default_factory=ToolchainConfig)
+    blobs: BlobsConfig = field(default_factory=BlobsConfig)
     # The two static bearer tokens; both unset means auth is disabled.
     client_token: str | None = None
     worker_token: str | None = None
@@ -107,6 +127,7 @@ def validate_timing(timing: TimingConfig, timeouts_s: Iterable[float] = ()) -> N
                 "kill_grace_s",
                 "claim_wait_s",
                 "client_read_timeout_s",
+                "upload_timeout_s",
             )
         ),
         (
