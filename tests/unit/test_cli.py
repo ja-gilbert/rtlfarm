@@ -1,4 +1,5 @@
-"""The ``rtlfarm`` entry point: the global options and ``dev pack``."""
+"""The ``rtlfarm`` entry point: the global options, ``dev pack``,
+``dev pin-toolchain`` and ``toolchain manifest``."""
 
 from __future__ import annotations
 
@@ -11,6 +12,7 @@ import pytest
 
 from rtlfarm.cli import main
 from rtlfarm.expand.pack import pack
+from rtlfarm.tools import manifest
 
 EXAMPLES = Path(__file__).resolve().parents[2] / "examples"
 
@@ -25,7 +27,7 @@ def test_help_exits_zero_and_prints_usage(capsys: pytest.CaptureFixture[str]) ->
     assert info.value.code == 0
     out = capsys.readouterr().out
     assert out.startswith("usage: rtlfarm")
-    for flag in ("--url", "--token", "--json", "dev"):
+    for flag in ("--url", "--token", "--json", "dev", "toolchain"):
         assert flag in out
 
 
@@ -109,3 +111,67 @@ def test_dev_pack_reports_pipeline_problems_by_pointer(
     (root / "rtlfarm.yaml").write_text(text.replace("version: 1", "version: 3"))
     assert main(["dev", "pack", str(root)]) == 1
     assert "/version" in capsys.readouterr().err
+
+
+################################################################################
+# toolchain manifest and dev pin-toolchain
+################################################################################
+
+
+def test_toolchain_manifest_prints_the_manifest_and_digest(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert main(["toolchain", "manifest"]) == 0
+    out = capsys.readouterr().out
+    body, last = out.rsplit("\n", 2)[0], out.rstrip("\n").rsplit("\n", 1)[1]
+    data = json.loads(body)
+    assert data["manifest_version"] == 1
+    assert "python" in data["tools"]
+    assert last == f"digest: {manifest.digest(data)}"
+
+
+def test_toolchain_manifest_writes_the_file(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out = tmp_path / "toolchain.json"
+    assert main(["--json", "toolchain", "manifest", "-o", str(out)]) == 0
+    printed = json.loads(capsys.readouterr().out)
+    assert manifest.read(out) == printed
+
+
+def test_dev_pin_toolchain_writes_the_digest_into_env(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    env = tmp_path / ".env"
+    env.write_text("RTLFARM_CLIENT_TOKEN=c\n", encoding="utf-8")
+    assert main(["dev", "pin-toolchain", "--env", str(env)]) == 0
+    digest = capsys.readouterr().out.strip()
+    assert len(digest) == 64
+    assert env.read_text(encoding="utf-8") == (
+        f"RTLFARM_CLIENT_TOKEN=c\nRTLFARM_TOOLCHAIN__DIGEST={digest}\n"
+    )
+
+
+def test_dev_pin_toolchain_from_a_manifest_file(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    data = manifest.generate(env={"PATH": str(tmp_path)})
+    manifest.write(data, tmp_path / "toolchain.json")
+    env = tmp_path / ".env"
+    assert (
+        main(
+            [
+                "--json",
+                "dev",
+                "pin-toolchain",
+                "--manifest",
+                str(tmp_path / "toolchain.json"),
+                "--env",
+                str(env),
+            ]
+        )
+        == 0
+    )
+    printed = json.loads(capsys.readouterr().out)
+    assert printed == {"digest": manifest.digest(data), "env": str(env)}
+    assert f"RTLFARM_TOOLCHAIN__DIGEST={manifest.digest(data)}" in env.read_text()
