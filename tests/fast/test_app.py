@@ -214,8 +214,11 @@ def test_loopback_bind_is_allowed_without_tokens(host: str) -> None:
     control_app.assert_bind_allowed(Config(), host)
 
 
-@pytest.mark.parametrize("host", ["0.0.0.0", "::", "10.0.0.5", "192.168.1.2"])
+@pytest.mark.parametrize(
+    "host", ["0.0.0.0", "::", "10.0.0.5", "192.168.1.2", "control.internal", ""]
+)
 def test_non_loopback_bind_without_tokens_is_refused(host: str) -> None:
+    """A host name is refused too: it cannot be shown to be loopback."""
     with pytest.raises(control_app.InsecureBind, match="not loopback"):
         control_app.assert_bind_allowed(Config(), host)
 

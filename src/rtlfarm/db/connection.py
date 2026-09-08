@@ -76,11 +76,15 @@ def open_connection(
         raise ValueError(f"synchronous must be one of {sorted(_SYNCHRONOUS_MODES)}")
     check_sqlite_version()
     conn = sqlite3.connect(path, autocommit=True)
-    conn.execute("PRAGMA journal_mode = WAL")
-    conn.execute("PRAGMA foreign_keys = ON")
-    conn.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
-    conn.execute(f"PRAGMA cache_size = {CACHE_SIZE}")
-    conn.execute(f"PRAGMA synchronous = {synchronous}")
+    try:
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
+        conn.execute(f"PRAGMA cache_size = {CACHE_SIZE}")
+        conn.execute(f"PRAGMA synchronous = {synchronous}")
+    except BaseException:
+        conn.close()  # a file that is not a database fails at the first pragma
+        raise
     return conn
 
 
@@ -89,10 +93,13 @@ def open_read_connection(path: Path) -> sqlite3.Connection:
 
     Reads on the writer connection would observe its uncommitted transaction;
     a separate connection sees only committed state. Opened through a URI with
-    ``mode=ro`` so a stray write is a driver error, not a silent one.
+    ``mode=ro`` so a stray write is a driver error, not a silent one;
+    ``as_uri`` percent-encodes the path, so a ``?`` or ``#`` in a directory
+    name is a file-name character rather than URI syntax.
     """
     check_sqlite_version()
-    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, autocommit=True)
+    uri = f"{path.resolve().as_uri()}?mode=ro"
+    conn = sqlite3.connect(uri, uri=True, autocommit=True)
     conn.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_MS}")
     conn.execute(f"PRAGMA cache_size = {CACHE_SIZE}")
     return conn

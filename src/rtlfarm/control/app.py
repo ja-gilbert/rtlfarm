@@ -110,14 +110,23 @@ def auth_enabled(config: Config) -> bool:
 
 def assert_bind_allowed(config: Config, host: str) -> None:
     """Refuse a non-loopback bind while auth is disabled, unless overridden."""
-    if auth_enabled(config) or config.insecure_bind:
-        return
-    if host in ("localhost",) or ipaddress.ip_address(host).is_loopback:
+    if auth_enabled(config) or config.insecure_bind or _is_loopback(host):
         return
     raise InsecureBind(
         f"auth is disabled (no tokens configured) and {host!r} is not loopback; "
         "set RTLFARM_INSECURE_BIND=1 to allow it"
     )
+
+
+def _is_loopback(host: str) -> bool:
+    """``localhost`` or a literal loopback address. A name is not a literal
+    address, so it cannot be shown to be loopback and is refused."""
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 def _bearer(request: Request) -> str | None:

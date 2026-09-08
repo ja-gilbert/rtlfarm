@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from rtlfarm.config import DEFAULT_DOTENV
 from rtlfarm.expand.pack import PackError, pack
 from rtlfarm.expand.pipeline import PipelineError
 from rtlfarm.tools import manifest as toolchain_manifest
@@ -44,7 +45,7 @@ def register(verbs: Subparsers) -> None:
         help="a generated toolchain manifest; default: generate one now",
     )
     pin.add_argument(
-        "--env", type=Path, default=Path(".env"), help="the dotenv file to write"
+        "--env", type=Path, default=DEFAULT_DOTENV, help="the dotenv file to write"
     )
     pin.set_defaults(handler=run_pin_toolchain)
 
