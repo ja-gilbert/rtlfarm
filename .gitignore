@@ -4,6 +4,7 @@ docs/private/
 *.db-wal
 *.db-shm
 blobs/
+/data/
 .venv/
 __pycache__/
 .idea/

@@ -78,13 +78,18 @@ class EventLogger:
 
 
 def configure_logging(
-    service: str, stream: TextIO = sys.stdout, level: int = logging.INFO
+    service: str, *, stream: TextIO | None = None, level: int = logging.INFO
 ) -> None:
-    """Make the JSON handler the root logger's only handler."""
+    """Make the JSON handler the root logger's only handler.
+
+    ``stream`` defaults to the process's stdout *at call time*, not at import
+    time, so a caller that has redirected stdout (a test harness, say) sees
+    the events.
+    """
     root = logging.getLogger()
     for existing in list(root.handlers):
         root.removeHandler(existing)
-    handler = logging.StreamHandler(stream)
+    handler = logging.StreamHandler(stream if stream is not None else sys.stdout)
     handler.setFormatter(JsonFormatter(service))
     root.addHandler(handler)
     root.setLevel(level)

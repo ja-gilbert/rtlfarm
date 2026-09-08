@@ -1,8 +1,9 @@
 """The ``rtlfarm`` command: a thin API client plus developer commands.
 
 Each verb lives in its own module and registers itself on the parser; this
-module holds only the global options and the dispatch. Verbs so far need no
-control plane: ``dev pack``, ``dev pin-toolchain``, ``toolchain manifest``.
+module holds only the global options and the dispatch. ``control run`` and
+``admin migrate`` operate the control plane; ``dev pack``, ``dev pin-toolchain``
+and ``toolchain manifest`` need no control plane at all.
 """
 
 from __future__ import annotations
@@ -11,7 +12,7 @@ import argparse
 import sys
 from collections.abc import Callable
 
-from rtlfarm.cli import dev, toolchain
+from rtlfarm.cli import admin, control, dev, toolchain
 
 Handler = Callable[[argparse.Namespace], int]
 
@@ -31,6 +32,8 @@ def build_parser() -> argparse.ArgumentParser:
     verbs = parser.add_subparsers(dest="verb", metavar="VERB")
     dev.register(verbs)
     toolchain.register(verbs)
+    control.register(verbs)
+    admin.register(verbs)
     return parser
 
 

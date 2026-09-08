@@ -39,3 +39,4 @@ coverage_bytes = 67108864     # 64 MiB: coverage.dat, coverage.info
 
 # control_url = "http://127.0.0.1:8080"   # where the CLI and workers reach the control plane
 # insecure_bind = false                   # allow a non-loopback bind with auth disabled
+# data_dir = "data"                       # the database and the blob store live under it
