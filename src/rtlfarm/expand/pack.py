@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
@@ -151,7 +151,9 @@ def pack(root: Path, *, exclude: Iterable[str] = ()) -> Manifest:
         problem = _bad_location(root, rel)
         if problem:
             issues.append(PackIssue(rel, problem))
-    issues.extend(_target_issues(pipeline, matched))
+    issues.extend(
+        target_issues(pipeline, {rel: role for rel, (role, _, _) in matched.items()})
+    )
     if issues:
         raise PackError(issues)
     entries = []
@@ -201,14 +203,14 @@ def _bad_location(root: Path, rel: str) -> str | None:
     return None
 
 
-def _target_issues(
-    pipeline: Pipeline, matched: dict[str, tuple[str, int, str]]
-) -> list[PackIssue]:
+def target_issues(pipeline: Pipeline, roles: Mapping[str, str]) -> list[PackIssue]:
+    """Every target file that is not packed under its role; ``roles`` maps
+    packed path to role. Used at pack time and again at submission."""
     issues: list[PackIssue] = []
     for i, target in enumerate(pipeline.targets):
         for role, paths in (("tb", target.tb), ("data", target.data)):
             for j, rel in enumerate(paths):
-                if matched.get(rel, ("", 0, ""))[0] != role:
+                if roles.get(rel) != role:
                     issues.append(
                         PackIssue(
                             f"/targets/{i}/{role}/{j}",

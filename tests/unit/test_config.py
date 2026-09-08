@@ -12,11 +12,14 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from rtlfarm.config import (
+    NON_CONFIG_ENV,
+    BlobsConfig,
     Config,
     ConfigError,
     TimingConfig,
     TimingError,
     load_config,
+    read_dotenv,
     validate_timing,
 )
 
@@ -56,10 +59,21 @@ ROUND_TRIP: list[tuple[str, str, str, object]] = [
     ("timing.requeue_backoff_s", "[1, 2, 3]", "[1, 2, 3]", (1.0, 2.0, 3.0)),
     ("timing.full_sweep_every", "7", "7", 7),
     ("timing.readyz_tick_factor", "4", "4", 4),
+    ("timing.upload_timeout_s", "45", "45", 45.0),
     ("toolchain.digest", '"0123abcd"', "0123abcd", "0123abcd"),
+    ("blobs.log_bytes", "1", "1", 1),
+    ("blobs.input_file_bytes", "2", "2", 2),
+    ("blobs.input_job_bytes", "3", "3", 3),
+    ("blobs.diagnostics_bytes", "4", "4", 4),
+    ("blobs.deps_bytes", "5", "5", 5),
+    ("blobs.compiled_bytes", "6", "6", 6),
+    ("blobs.result_bytes", "7", "7", 7),
+    ("blobs.waveform_bytes", "8", "8", 8),
+    ("blobs.coverage_bytes", "9", "9", 9),
     ("client_token", '"client-secret"', "client-secret", "client-secret"),
     ("worker_token", '"worker-secret"', "worker-secret", "worker-secret"),
     ("insecure_bind", "true", "1", True),
+    ("data_dir", '"/var/lib/rtlfarm"', "/var/lib/rtlfarm", "/var/lib/rtlfarm"),
     (
         "control_url",
         '"http://control:8080"',
@@ -104,11 +118,24 @@ def test_defaults_match_spec_table() -> None:
         requeue_backoff_s=(0.0, 5.0, 30.0),
         full_sweep_every=30,
         readyz_tick_factor=3,
+        upload_timeout_s=300.0,
     )
     assert config.toolchain.digest is None
+    assert config.blobs == BlobsConfig(
+        log_bytes=16 * 1024 * 1024,
+        input_file_bytes=64 * 1024 * 1024,
+        input_job_bytes=512 * 1024 * 1024,
+        diagnostics_bytes=4 * 1024 * 1024,
+        deps_bytes=4 * 1024 * 1024,
+        compiled_bytes=256 * 1024 * 1024,
+        result_bytes=1024 * 1024,
+        waveform_bytes=512 * 1024 * 1024,
+        coverage_bytes=64 * 1024 * 1024,
+    )
     assert config.client_token is None
     assert config.worker_token is None
     assert config.insecure_bind is False
+    assert config.data_dir == "data"
 
 
 def test_config_is_frozen() -> None:
@@ -122,6 +149,19 @@ def test_config_is_frozen() -> None:
 def test_missing_toml_file_is_an_error(tmp_path: Path) -> None:
     with pytest.raises(ConfigError, match=r"rtlfarm\.toml"):
         load_config(toml_path=tmp_path / "rtlfarm.toml", env={})
+
+
+def test_a_config_path_that_cannot_be_opened_is_an_error(tmp_path: Path) -> None:
+    """Any open failure, not only a missing file: a directory, say."""
+    with pytest.raises(ConfigError, match="config file"):
+        load_config(toml_path=tmp_path, env={})
+
+
+def test_a_config_file_that_is_not_utf8_is_an_error(tmp_path: Path) -> None:
+    toml = tmp_path / "rtlfarm.toml"
+    toml.write_bytes(b"\xff\xfe[\x00t\x00")  # UTF-16 with a byte-order mark
+    with pytest.raises(ConfigError, match="config file"):
+        load_config(toml_path=toml, env={})
 
 
 # --- the four layers ----------------------------------------------------------
@@ -178,9 +218,11 @@ def test_layers_merge_key_by_key(tmp_path: Path) -> None:
     assert config.timing.tick_s == 1.0
 
 
-def test_the_test_hooks_switch_is_not_a_config_key() -> None:
-    """RTLFARM_TEST_HOOKS is a test-harness switch the loader must ignore."""
-    config = load_config(toml_path=None, env={"RTLFARM_TEST_HOOKS": "1"})
+@pytest.mark.parametrize("name", ["RTLFARM_TEST_HOOKS", "RTLFARM_UPDATE_SNAPSHOTS"])
+def test_process_switches_are_not_config_keys(name: str) -> None:
+    """The fault-hook and snapshot switches are not configuration keys."""
+    assert name in NON_CONFIG_ENV
+    config = load_config(toml_path=None, env={name: "1"})
     assert config == Config()
 
 
@@ -385,6 +427,7 @@ def test_no_timeouts_means_no_timeout_checks() -> None:
         "kill_grace_s",
         "claim_wait_s",
         "client_read_timeout_s",
+        "upload_timeout_s",
     ],
 )
 @pytest.mark.parametrize("bad", [0.0, -1.0])
@@ -501,9 +544,63 @@ def test_committed_rtlfarm_toml_loads_and_equals_the_defaults() -> None:
 
 
 def test_committed_env_example_names_only_known_keys() -> None:
-    lines = (REPO / ".env.example").read_text().splitlines()
-    pairs = [line.split("=", 1) for line in lines if line and not line.startswith("#")]
-    env = {name: value for name, value in pairs}
+    env = read_dotenv(REPO / ".env.example")
     assert env, "expected at least one RTLFARM_ key in .env.example"
     assert all(name.startswith("RTLFARM_") for name in env)
     load_config(toml_path=None, env=env)
+
+
+################################################################################
+# Dotenv Files
+################################################################################
+
+
+def test_read_dotenv_parses_pairs_and_skips_noise(tmp_path: Path) -> None:
+    env = tmp_path / ".env"
+    env.write_text(
+        "# tokens\n"
+        "export RTLFARM_CLIENT_TOKEN=abc # the client token\n"
+        "export\tRTLFARM_INSECURE_BIND=1\n"
+        "export\n"
+        "\n"
+        "RTLFARM_WORKER_TOKEN = 'quoted' # after the closing quote\n"
+        'RTLFARM_DATA_DIR="/srv/farm"\n'
+        "RTLFARM_CONTROL_URL=http://h:1#not-a-comment\n"
+        "not a pair\n"
+        "RTLFARM_TOOLCHAIN__DIGEST=\n",
+        encoding="utf-8",
+    )
+    assert read_dotenv(env) == {
+        "RTLFARM_CLIENT_TOKEN": "abc",
+        "RTLFARM_INSECURE_BIND": "1",
+        "RTLFARM_WORKER_TOKEN": "quoted",
+        "RTLFARM_DATA_DIR": "/srv/farm",
+        "RTLFARM_CONTROL_URL": "http://h:1#not-a-comment",
+        "RTLFARM_TOOLCHAIN__DIGEST": "",
+    }
+
+
+def test_read_dotenv_of_a_missing_file_is_empty(tmp_path: Path) -> None:
+    assert read_dotenv(tmp_path / "absent") == {}
+
+
+def test_read_dotenv_rejects_a_quote_that_never_closes(tmp_path: Path) -> None:
+    """A corrupted token must not be accepted silently."""
+    env = tmp_path / ".env"
+    env.write_text('RTLFARM_WORKER_TOKEN=w\nRTLFARM_CLIENT_TOKEN="abc\n', "utf-8")
+    with pytest.raises(ConfigError, match=r"\.env, line 2: a quoted value"):
+        read_dotenv(env)
+
+
+def test_read_dotenv_of_an_undecodable_file_is_an_error(tmp_path: Path) -> None:
+    env = tmp_path / ".env"
+    env.write_bytes(b"\xff\xfeR\x00T\x00L\x00")  # UTF-16 with a byte-order mark
+    with pytest.raises(ConfigError, match=r"dotenv file .*\.env"):
+        read_dotenv(env)
+
+
+def test_dotenv_values_load_through_the_env_layer(tmp_path: Path) -> None:
+    env = tmp_path / ".env"
+    env.write_text("RTLFARM_CLIENT_TOKEN=c\nRTLFARM_DATA_DIR=/srv/farm\n")
+    config = load_config(toml_path=None, env=read_dotenv(env))
+    assert (config.client_token, config.data_dir) == ("c", "/srv/farm")

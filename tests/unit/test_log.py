@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 import logging
+import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -137,3 +138,14 @@ def test_fixed_keys_cannot_be_overwritten_by_fields(
     with pytest.raises(ValueError, match=name):
         logger.info("started", **{name: "overwritten"})
     assert stream.getvalue() == ""
+
+
+def test_default_stream_is_resolved_at_call_time(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A stdout swapped in after import (as pytest does) still receives events."""
+    replacement = io.StringIO()
+    monkeypatch.setattr(sys, "stdout", replacement)
+    log.configure_logging("svc")
+    log.get_logger("t").info("hello")
+    assert json.loads(replacement.getvalue())["event"] == "hello"

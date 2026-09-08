@@ -29,8 +29,13 @@ from rtlfarm import hooks
 
 ENV_PREFIX = "RTLFARM_"
 
-#: ``RTLFARM_*`` variables that are process switches, not configuration keys.
-NON_CONFIG_ENV: frozenset[str] = frozenset({hooks.ENV_VAR})
+#: ``RTLFARM_*`` variables that are process switches, not configuration keys:
+#: the fault-hook switch and the test suite's snapshot-rewrite switch.
+NON_CONFIG_ENV: frozenset[str] = frozenset({hooks.ENV_VAR, "RTLFARM_UPDATE_SNAPSHOTS"})
+
+#: The files the layering reads when the command line names none.
+DEFAULT_TOML = Path("rtlfarm.toml")
+DEFAULT_DOTENV = Path(".env")
 
 
 class ConfigError(ValueError):
@@ -59,6 +64,7 @@ class TimingConfig:
     requeue_backoff_s: tuple[float, ...] = (0.0, 5.0, 30.0)
     full_sweep_every: int = 30
     readyz_tick_factor: int = 3
+    upload_timeout_s: float = 300.0
 
 
 @dataclass(frozen=True)
@@ -68,16 +74,43 @@ class ToolchainConfig:
     digest: str | None = None
 
 
+_MIB = 1024 * 1024
+
+
+@dataclass(frozen=True)
+class BlobsConfig:
+    """Size caps per blob kind, in bytes, enforced while an upload streams in."""
+
+    log_bytes: int = 16 * _MIB
+    input_file_bytes: int = 64 * _MIB
+    input_job_bytes: int = 512 * _MIB
+    diagnostics_bytes: int = 4 * _MIB
+    deps_bytes: int = 4 * _MIB
+    compiled_bytes: int = 256 * _MIB
+    result_bytes: int = 1 * _MIB
+    waveform_bytes: int = 512 * _MIB
+    coverage_bytes: int = 64 * _MIB
+
+
 @dataclass(frozen=True)
 class Config:
     timing: TimingConfig = field(default_factory=TimingConfig)
     toolchain: ToolchainConfig = field(default_factory=ToolchainConfig)
+    blobs: BlobsConfig = field(default_factory=BlobsConfig)
     # The two static bearer tokens; both unset means auth is disabled.
     client_token: str | None = None
     worker_token: str | None = None
     insecure_bind: bool = False
     # Where the CLI (``--url``) and workers find the control plane.
     control_url: str = "http://127.0.0.1:8080"
+    # The control plane's volume: the database and the blob store live under
+    # it. A string, like every leaf the loader knows how to read; callers
+    # wrap it in ``Path`` once.
+    data_dir: str = "data"
+
+
+#: The fields whose values must never reach a log line or a fingerprint.
+SECRET_FIELDS: frozenset[str] = frozenset({"client_token", "worker_token"})
 
 
 # --- validate_timing ---------------------------------------------------------
@@ -107,6 +140,7 @@ def validate_timing(timing: TimingConfig, timeouts_s: Iterable[float] = ()) -> N
                 "kill_grace_s",
                 "claim_wait_s",
                 "client_read_timeout_s",
+                "upload_timeout_s",
             )
         ),
         (
@@ -175,6 +209,52 @@ def validate_timing(timing: TimingConfig, timeouts_s: Iterable[float] = ()) -> N
 _Flat = dict[str, object]
 
 
+def read_dotenv(path: Path) -> dict[str, str]:
+    """Read a ``KEY=VALUE`` file in the subset of the Compose ``.env`` format a
+    hand-written file uses.
+
+    Blank lines and ``#`` comments are skipped: a whole line, or the rest of
+    a line after a space that follows an unquoted value or a closing quote.
+    A leading ``export`` word is dropped, one pair of matching quotes is
+    stripped, and a line without ``=`` is skipped. There is no variable
+    interpolation and no escape sequence. A missing file is an empty
+    mapping; a file that cannot be read or decoded, or a quoted value that
+    never closes, is a ``ConfigError``.
+    """
+    if not path.is_file():
+        return {}
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as e:
+        raise ConfigError(f"dotenv file {path}: {e}") from None
+    values: dict[str, str] = {}
+    for number, raw in enumerate(text.splitlines(), start=1):
+        line = raw.strip()
+        words = line.split(maxsplit=1)  # a file meant to be sourced says export
+        if words and words[0] == "export":
+            line = words[1] if len(words) == 2 else ""
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        try:
+            values[key.strip()] = _dotenv_value(value)
+        except ValueError as e:
+            raise ConfigError(f"dotenv file {path}, line {number}: {e}") from None
+    return values
+
+
+def _dotenv_value(text: str) -> str:
+    """The value of a dotenv line: a quoted value verbatim up to its closing
+    quote, an unquoted one up to an inline comment."""
+    value = text.strip()
+    if value[:1] in ("'", '"'):
+        closing = value.find(value[0], 1)
+        if closing == -1:
+            raise ValueError("a quoted value has no closing quote")
+        return value[1:closing]
+    return value.split(" #", 1)[0].rstrip()
+
+
 def load_config(
     *,
     toml_path: Path | None,
@@ -203,7 +283,9 @@ def _from_toml(path: Path) -> _Flat:
             raw = tomllib.load(f)
     except FileNotFoundError:
         raise ConfigError(f"config file {path} does not exist") from None
-    except tomllib.TOMLDecodeError as e:
+    except OSError as e:
+        raise ConfigError(f"config file {path}: {e}") from None
+    except (tomllib.TOMLDecodeError, UnicodeDecodeError) as e:
         raise ConfigError(f"config file {path}: {e}") from None
     flat: _Flat = {}
     for key, value in raw.items():

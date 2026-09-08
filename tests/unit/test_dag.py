@@ -213,6 +213,25 @@ def test_whole_design_stage_downstream_of_a_fan_out_depends_on_all_of_it() -> No
     assert job.task(f"{JOB}.coverage._.s0").depends_on == tuple(_ids(job, "simulate"))
 
 
+def test_a_stage_declared_before_its_dependency_still_expands() -> None:
+    """Declaration order is not dependency order; expansion follows the graph."""
+    data = _pipeline()
+    stages = data["stages"]
+    data["stages"] = {
+        "simulate": stages["simulate"],
+        "compile": stages["compile"],
+        "lint": stages["lint"],
+    }
+    job = _expand(_manifest(data))
+    assert [t.stage_kind for t in job.tasks] == ["lint"] + ["compile"] * 2 + [
+        "simulate"
+    ] * 5
+    assert job.task(f"{JOB}.simulate.tb_basic.s1").depends_on == (
+        f"{JOB}.compile.tb_basic.s0",
+    )
+    assert job.task(f"{JOB}.compile.tb_basic.s0").depends_on == (f"{JOB}.lint._.s0",)
+
+
 def test_dependency_rows_are_success_edges_in_task_order() -> None:
     rows = _expand().dependencies()
     assert rows[0] == (f"{JOB}.compile.tb_basic.s0", f"{JOB}.lint._.s0", "success")

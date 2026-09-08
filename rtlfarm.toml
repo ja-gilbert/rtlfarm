@@ -21,9 +21,22 @@ client_read_timeout_s = 30    # HTTP client timeout on the worker
 requeue_backoff_s = [0, 5, 30] # not_before schedule by retry counter
 full_sweep_every = 30         # ticks between readiness self-heals
 readyz_tick_factor = 3        # /readyz fails when the last good tick is older than this x tick_s
+upload_timeout_s = 300        # a blob upload older than this in tmp/ is swept at startup
+
+[blobs]                       # size caps per blob kind, bytes, enforced while an upload streams in
+log_bytes = 16777216          # 16 MiB: log.stdout, log.stderr
+input_file_bytes = 67108864   # 64 MiB per design-pack file
+input_job_bytes = 536870912   # 512 MiB per job of design-pack files
+diagnostics_bytes = 4194304   # 4 MiB: diagnostics.json
+deps_bytes = 4194304          # 4 MiB: deps.txt
+compiled_bytes = 268435456    # 256 MiB: compiled
+result_bytes = 1048576        # 1 MiB: result.json
+waveform_bytes = 536870912    # 512 MiB: waveform.fst
+coverage_bytes = 67108864     # 64 MiB: coverage.dat, coverage.info
 
 [toolchain]
 # digest = "<sha256 of toolchain-manifest.json>"   # usually pinned via .env by `rtlfarm dev pin-toolchain`
 
 # control_url = "http://127.0.0.1:8080"   # where the CLI and workers reach the control plane
 # insecure_bind = false                   # allow a non-loopback bind with auth disabled
+# data_dir = "data"                       # the database and the blob store live under it

@@ -6,6 +6,8 @@ connections that never see an open write.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import os
 import sqlite3
 from collections.abc import Iterator
 from pathlib import Path
@@ -213,6 +215,52 @@ def test_read_connection_is_autocommit_with_the_busy_timeout(db: Database) -> No
         connection.BUSY_TIMEOUT_MS,
     )
     reader.close()
+
+
+@pytest.mark.skipif(not Path("/proc/self/fd").is_dir(), reason="needs /proc")
+def test_a_failed_open_does_not_leave_the_connection_behind(tmp_path: Path) -> None:
+    """The first pragma fails on a file that is not a database; the connection
+    it ran on must be closed before the error leaves ``open_connection``."""
+    bad = tmp_path / "rtlfarm.db"
+    bad.write_bytes(b"not a database" * 8)
+    try:
+        connection.open_connection(bad)
+    except sqlite3.DatabaseError:
+        # While the exception is alive its traceback still references the
+        # connection, so an unclosed one shows up as an open descriptor.
+        open_files = _open_files()
+    else:
+        pytest.fail("a file that is not a database opened without error")
+    assert str(bad) not in open_files
+
+
+def _open_files() -> list[str]:
+    names = []
+    for fd in os.listdir("/proc/self/fd"):
+        with contextlib.suppress(OSError):  # the listing descriptor is gone
+            names.append(os.readlink(f"/proc/self/fd/{fd}"))
+    return names
+
+
+def test_read_connection_opens_the_named_file_despite_uri_characters(
+    tmp_path: Path,
+) -> None:
+    """``?``, ``#`` and ``%`` in a directory name are file-name characters; the
+    reader must open the file the writer migrated, not a URI-mangled path."""
+    odd = tmp_path / "vol?a#b%c"
+    odd.mkdir()
+    database = Database(odd / "rtlfarm.db", synchronous="OFF")
+    try:
+        database.migrate(DrivenClock())
+        reader = database.read()
+        try:
+            rows = reader.execute("SELECT version FROM schema_migrations").fetchall()
+        finally:
+            reader.close()
+    finally:
+        database.close()
+    assert rows == [(1,)]
+    assert [p.name for p in tmp_path.iterdir()] == ["vol?a#b%c"]
 
 
 def test_closed_database_rejects_writes(tmp_path: Path) -> None:

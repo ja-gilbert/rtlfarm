@@ -1,16 +1,23 @@
-"""The ``rtlfarm`` entry point: the global options and ``dev pack``."""
+"""The ``rtlfarm`` entry point: the global options, ``dev pack``,
+``dev pin-toolchain``, ``toolchain manifest``, ``control run`` and
+``admin migrate``."""
 
 from __future__ import annotations
 
 import json
 import shutil
+import signal
 import subprocess
 from pathlib import Path
 
 import pytest
+import uvicorn
+from fastapi import FastAPI
 
+from rtlfarm.cli import control as control_cli
 from rtlfarm.cli import main
 from rtlfarm.expand.pack import pack
+from rtlfarm.tools import manifest
 
 EXAMPLES = Path(__file__).resolve().parents[2] / "examples"
 
@@ -25,7 +32,7 @@ def test_help_exits_zero_and_prints_usage(capsys: pytest.CaptureFixture[str]) ->
     assert info.value.code == 0
     out = capsys.readouterr().out
     assert out.startswith("usage: rtlfarm")
-    for flag in ("--url", "--token", "--json", "dev"):
+    for flag in ("--url", "--token", "--json", "dev", "toolchain", "control", "admin"):
         assert flag in out
 
 
@@ -109,3 +116,260 @@ def test_dev_pack_reports_pipeline_problems_by_pointer(
     (root / "rtlfarm.yaml").write_text(text.replace("version: 1", "version: 3"))
     assert main(["dev", "pack", str(root)]) == 1
     assert "/version" in capsys.readouterr().err
+
+
+################################################################################
+# toolchain manifest and dev pin-toolchain
+################################################################################
+
+
+def test_toolchain_manifest_prints_the_manifest_and_digest(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert main(["toolchain", "manifest"]) == 0
+    out = capsys.readouterr().out
+    body, last = out.rsplit("\n", 2)[0], out.rstrip("\n").rsplit("\n", 1)[1]
+    data = json.loads(body)
+    assert data["manifest_version"] == 1
+    assert "python" in data["tools"]
+    assert last == f"digest: {manifest.digest(data)}"
+
+
+def test_toolchain_manifest_writes_the_file(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out = tmp_path / "toolchain.json"
+    assert main(["--json", "toolchain", "manifest", "-o", str(out)]) == 0
+    printed = json.loads(capsys.readouterr().out)
+    assert manifest.read(out) == printed
+
+
+def test_dev_pin_toolchain_writes_the_digest_into_env(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    env = tmp_path / ".env"
+    env.write_text("RTLFARM_CLIENT_TOKEN=c\n", encoding="utf-8")
+    assert main(["dev", "pin-toolchain", "--env", str(env)]) == 0
+    digest = capsys.readouterr().out.strip()
+    assert len(digest) == 64
+    assert env.read_text(encoding="utf-8") == (
+        f"RTLFARM_CLIENT_TOKEN=c\nRTLFARM_TOOLCHAIN__DIGEST={digest}\n"
+    )
+
+
+def test_dev_pin_toolchain_from_a_manifest_file(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    data = manifest.generate(env={"PATH": str(tmp_path)})
+    manifest.write(data, tmp_path / "toolchain.json")
+    env = tmp_path / ".env"
+    assert (
+        main(
+            [
+                "--json",
+                "dev",
+                "pin-toolchain",
+                "--manifest",
+                str(tmp_path / "toolchain.json"),
+                "--env",
+                str(env),
+            ]
+        )
+        == 0
+    )
+    printed = json.loads(capsys.readouterr().out)
+    assert printed == {"digest": manifest.digest(data), "env": str(env)}
+    assert f"RTLFARM_TOOLCHAIN__DIGEST={manifest.digest(data)}" in env.read_text()
+
+
+################################################################################
+# control run and admin migrate
+################################################################################
+
+
+@pytest.fixture
+def served(monkeypatch: pytest.MonkeyPatch) -> list[tuple[FastAPI, str, int]]:
+    """``serve`` replaced by a recorder, so ``control run`` returns at once."""
+    calls: list[tuple[FastAPI, str, int]] = []
+    monkeypatch.setattr(
+        control_cli, "serve", lambda app, host, port: calls.append((app, host, port))
+    )
+    return calls
+
+
+def test_control_run_prepares_and_serves_on_the_requested_bind(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    served: list[tuple[FastAPI, str, int]],
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".env").write_text("RTLFARM_CLIENT_TOKEN=c\n", encoding="utf-8")
+    assert main(["control", "run", "--host", "0.0.0.0", "--port", "9000"]) == 0
+    ((app, host, port),) = served
+    assert (host, port) == ("0.0.0.0", 9000)
+    assert app.state.services.config.client_token == "c"
+    assert app.state.services.readiness.migrated is True
+    assert (tmp_path / "data" / "rtlfarm.db").is_file()
+    assert (tmp_path / "data" / "blobs" / "tmp").is_dir()
+    lines = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert "control_plane_started" in [line["event"] for line in lines]
+
+
+def test_control_run_refuses_a_non_loopback_bind_without_tokens(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    served: list[tuple[FastAPI, str, int]],
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    assert main(["control", "run", "--host", "0.0.0.0"]) == 1
+    assert "not loopback" in capsys.readouterr().err
+    assert served == []
+    assert not (tmp_path / "data").exists()
+
+
+def test_control_run_honors_the_insecure_override_and_the_env_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    served: list[tuple[FastAPI, str, int]],
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    env_file = tmp_path / "farm.env"
+    env_file.write_text("RTLFARM_INSECURE_BIND=1\n", encoding="utf-8")
+    assert (
+        main(["control", "run", "--host", "0.0.0.0", "--env-file", str(env_file)]) == 0
+    )
+    ((app, host, _),) = served
+    assert host == "0.0.0.0"
+    assert app.state.services.config.insecure_bind is True
+    assert app.state.services.config.client_token is None
+
+
+def test_process_environment_beats_the_env_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    served: list[tuple[FastAPI, str, int]],
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".env").write_text("RTLFARM_CLIENT_TOKEN=from-file\n", encoding="utf-8")
+    monkeypatch.setenv("RTLFARM_CLIENT_TOKEN", "from-process")
+    assert main(["control", "run"]) == 0
+    ((app, _, _),) = served
+    assert app.state.services.config.client_token == "from-process"
+
+
+def test_control_run_closes_the_database_when_stopped_by_sigterm(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """uvicorn re-raises the stop signal once it has drained; the database
+    must still be closed (a WAL left behind would show it was not) and the
+    exit must be clean."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / ".env").write_text("RTLFARM_CLIENT_TOKEN=c\n", encoding="utf-8")
+    before = signal.getsignal(signal.SIGTERM)
+
+    def stopped_by_sigterm(app: FastAPI, **options: object) -> None:
+        signal.raise_signal(signal.SIGTERM)
+
+    monkeypatch.setattr(uvicorn, "run", stopped_by_sigterm)
+    with pytest.raises(SystemExit) as info:
+        main(["control", "run"])
+    assert info.value.code == 0
+    assert (tmp_path / "data" / "rtlfarm.db").is_file()
+    assert not (tmp_path / "data" / "rtlfarm.db-wal").exists()
+    assert signal.getsignal(signal.SIGTERM) is before
+
+
+def test_the_env_file_beats_the_config_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "farm.toml").write_text('data_dir = "from-toml"\n', encoding="utf-8")
+    (tmp_path / ".env").write_text("RTLFARM_DATA_DIR=from-env\n", encoding="utf-8")
+    assert main(["--json", "admin", "migrate", "--config", "farm.toml"]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["database"] == str(Path("from-env") / "rtlfarm.db")
+    assert (tmp_path / "from-env" / "rtlfarm.db").is_file()
+    assert not (tmp_path / "from-toml").exists()
+
+
+def test_the_config_file_in_the_working_directory_is_read_by_default(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "rtlfarm.toml").write_text('data_dir = "vol"\n', encoding="utf-8")
+    assert main(["--json", "admin", "migrate"]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["database"] == str(Path("vol") / "rtlfarm.db")
+
+
+@pytest.mark.parametrize("flag", ["--config", "--env-file"])
+def test_a_file_named_on_the_command_line_must_exist(
+    flag: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    assert main(["admin", "migrate", flag, "absent"]) == 1
+    assert "absent" in capsys.readouterr().err
+    assert not (tmp_path / "data").exists()
+
+
+def test_control_run_reports_a_bad_configuration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("RTLFARM_TIMING__LEASE_TTL_S", "1")
+    assert main(["control", "run"]) == 1
+    assert "lease_ttl_s" in capsys.readouterr().err
+
+
+def test_control_run_reports_an_unusable_volume(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    served: list[tuple[FastAPI, str, int]],
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "afile").write_text("", encoding="utf-8")
+    monkeypatch.setenv("RTLFARM_DATA_DIR", "afile")
+    assert main(["control", "run"]) == 1
+    assert "afile" in capsys.readouterr().err
+    assert served == []
+
+
+def test_admin_migrate_applies_and_reports(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    assert main(["--json", "admin", "migrate"]) == 0
+    first = json.loads(capsys.readouterr().out)
+    assert first == {
+        "database": str(Path("data") / "rtlfarm.db"),
+        "applied": [1],
+        "at": [1],
+    }
+    assert main(["admin", "migrate"]) == 0
+    assert "applied nothing; at 1" in capsys.readouterr().out
+
+
+def test_admin_migrate_reports_a_bad_configuration(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("RTLFARM_TIMING__LEASE_TTL_S", "thirty")
+    assert main(["admin", "migrate"]) == 1
+    assert "RTLFARM_TIMING__LEASE_TTL_S" in capsys.readouterr().err
+    assert not (tmp_path / "data").exists()
+
+
+def test_admin_migrate_reports_an_unusable_data_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "afile").write_text("", encoding="utf-8")
+    monkeypatch.setenv("RTLFARM_DATA_DIR", "afile")
+    assert main(["admin", "migrate"]) == 1
+    assert "afile" in capsys.readouterr().err
