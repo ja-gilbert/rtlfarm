@@ -91,10 +91,11 @@ def create_app(config: Config, db: Database, blobs: BlobStore, clock: Clock) -> 
     app.add_exception_handler(HTTPException, _http_error)
     app.add_exception_handler(RequestValidationError, _validation_error)
     from rtlfarm.control.routes import blobs as blob_routes
-    from rtlfarm.control.routes import infra
+    from rtlfarm.control.routes import infra, jobs
 
     app.include_router(infra.router)
     app.include_router(blob_routes.router)
+    app.include_router(jobs.router)
     return app
 
 
