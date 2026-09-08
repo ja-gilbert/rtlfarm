@@ -15,20 +15,24 @@ instead of a second one; the same key with different work is a conflict.
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from collections.abc import Iterable
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, Query, Response
 
+from rtlfarm.config import TimingError, validate_timing
 from rtlfarm.control.app import ApiError, ClientAuth, Services, services
 from rtlfarm.control.wire import (
     JobCreated,
     JobList,
+    JobState,
     JobView,
     SubmitRequest,
     TaskDetail,
     TaskList,
+    TaskState,
     TaskView,
 )
 from rtlfarm.expand.dag import ExpandedJob, Selection, SelectionError, expand
@@ -37,10 +41,15 @@ from rtlfarm.expand.pipeline import PipelineError, parse_pipeline
 from rtlfarm.ids import new_ulid
 from rtlfarm.models import ROLES
 
+_SHA256_RE = re.compile(r"[0-9a-f]{64}")
+
 router = APIRouter(prefix="/v1", tags=["jobs"])
 
 LIST_LIMIT_DEFAULT = 50
-LIST_LIMIT_CAP = 200
+LIST_LIMIT_CAP = 1000
+
+#: SQLite binds at most 32766 parameters per statement; keep well under it.
+_IN_CHUNK = 500
 
 _JOB_COLUMNS = (
     "job_id, design_name, state, priority, label, submission_hash, "
@@ -88,13 +97,16 @@ async def submit(
         raise ApiError(
             422, "VALIDATION", str(e), [{"pointer": "/selection", "message": str(e)}]
         ) from None
+    if not idempotency_key:
+        idempotency_key = None
     async with svc.db.write() as conn:
         if idempotency_key is not None:
             existing = _replay(conn, idempotency_key, job.submission_hash)
             if existing is not None:
                 response.status_code = 200
                 return existing
-        missing = _missing_blobs(conn, {f.sha256 for f in manifest.files})
+        stored = _stored_sizes(conn, {f.sha256 for f in manifest.files})
+        missing = sorted({f.sha256 for f in manifest.files} - stored.keys())
         if missing:
             raise ApiError(
                 409,
@@ -102,6 +114,7 @@ async def submit(
                 f"{len(missing)} input blob(s) have not been uploaded",
                 {"missing": missing},
             )
+        _check_sizes(body, stored, svc)
         _write_job(conn, job, manifest, body, selection, idempotency_key, now)
     return JobCreated(job_id=job.job_id, n_tasks=len(job.tasks))
 
@@ -144,15 +157,15 @@ def _manifest_from(body: SubmitRequest, svc: Services) -> Manifest:
     )
     if issues:
         raise ApiError(422, "VALIDATION", "the manifest is not valid", issues)
-    caps = svc.config.blobs
-    total = sum(entry.size for entry in body.manifest.files)
-    if total > caps.input_job_bytes:
+    try:
+        validate_timing(svc.config.timing, pipeline.stage_timeouts())
+    except TimingError as e:
         raise ApiError(
-            413,
-            "PAYLOAD_TOO_LARGE",
-            f"the design pack is {total} bytes; the cap is {caps.input_job_bytes}",
-            {"kind": "input", "cap": caps.input_job_bytes},
-        )
+            422,
+            "VALIDATION",
+            "a stage timeout conflicts with the farm's timing constants",
+            [{"pointer": "/manifest/pipeline/stages", "message": str(e)}],
+        ) from None
     entries = tuple(
         ManifestEntry(e.path, e.role, e.ordinal, e.sha256, e.size)
         for e in body.manifest.files
@@ -162,18 +175,70 @@ def _manifest_from(body: SubmitRequest, svc: Services) -> Manifest:
 
 
 def _resolve_digest(body: SubmitRequest, manifest: Manifest, svc: Services) -> str:
+    """Body, then the pipeline's pin, then the control plane's own pin."""
     for candidate in (
         body.toolchain_digest,
         manifest.pipeline.toolchain.digest,
         svc.config.toolchain.digest,
     ):
         if candidate:
+            if not _SHA256_RE.fullmatch(candidate):
+                raise ApiError(
+                    422,
+                    "TOOLCHAIN_UNPINNED",
+                    f"the toolchain digest {candidate!r} is not a hex SHA-256",
+                )
             return candidate
     raise ApiError(
         422,
         "TOOLCHAIN_UNPINNED",
         "no toolchain digest: pass one, pin it in the pipeline, or configure it",
     )
+
+
+def _stored_sizes(conn: sqlite3.Connection, digests: set[str]) -> dict[str, int]:
+    """The recorded size of every present blob, queried in bounded batches."""
+    found: dict[str, int] = {}
+    pending = sorted(digests)
+    for start in range(0, len(pending), _IN_CHUNK):
+        chunk = pending[start : start + _IN_CHUNK]
+        marks = ", ".join("?" for _ in chunk)
+        for sha256, size in conn.execute(
+            f"SELECT sha256, size FROM blobs WHERE sha256 IN ({marks})", chunk
+        ).fetchall():
+            found[str(sha256)] = int(size)
+    return found
+
+
+def _check_sizes(body: SubmitRequest, stored: dict[str, int], svc: Services) -> None:
+    """Declared sizes must match the stored blobs, and the caps use stored sizes."""
+    caps = svc.config.blobs
+    mismatches = [
+        {
+            "pointer": f"/manifest/files/{i}/size",
+            "message": f"the stored blob is {stored[entry.sha256]} bytes",
+        }
+        for i, entry in enumerate(body.manifest.files)
+        if entry.size != stored[entry.sha256]
+    ]
+    if mismatches:
+        raise ApiError(422, "VALIDATION", "sizes disagree with the blobs", mismatches)
+    largest = max((stored[e.sha256] for e in body.manifest.files), default=0)
+    if largest > caps.input_file_bytes:
+        raise ApiError(
+            413,
+            "PAYLOAD_TOO_LARGE",
+            f"an input file is {largest} bytes; the cap is {caps.input_file_bytes}",
+            {"kind": "input", "cap": caps.input_file_bytes},
+        )
+    total = sum(stored[e.sha256] for e in body.manifest.files)
+    if total > caps.input_job_bytes:
+        raise ApiError(
+            413,
+            "PAYLOAD_TOO_LARGE",
+            f"the design pack is {total} bytes; the cap is {caps.input_job_bytes}",
+            {"kind": "input", "cap": caps.input_job_bytes},
+        )
 
 
 def _replay(
@@ -193,19 +258,6 @@ def _replay(
             {"job_id": row[0]},
         )
     return JobCreated(job_id=str(row[0]), n_tasks=int(row[1]))
-
-
-def _missing_blobs(conn: sqlite3.Connection, digests: set[str]) -> list[str]:
-    if not digests:
-        return []
-    marks = ", ".join("?" for _ in digests)
-    present = {
-        str(row[0])
-        for row in conn.execute(
-            f"SELECT sha256 FROM blobs WHERE sha256 IN ({marks})", tuple(digests)
-        ).fetchall()
-    }
-    return sorted(digests - present)
 
 
 def _write_job(
@@ -304,20 +356,21 @@ def _limit(limit: int | None) -> int:
 async def list_jobs(
     _: ClientAuth,
     svc: Annotated[Services, Depends(services)],
-    state: Annotated[str | None, Query()] = None,
+    state: Annotated[JobState | None, Query()] = None,
     limit: Annotated[int | None, Query(ge=1)] = None,
 ) -> JobList:
     reader = svc.db.read()
     try:
         if state is None:
             rows = reader.execute(
-                f"SELECT {_JOB_COLUMNS} FROM jobs ORDER BY job_id DESC LIMIT ?",
+                f"SELECT {_JOB_COLUMNS} FROM jobs "
+                "ORDER BY created_at_ms DESC, job_id DESC LIMIT ?",
                 (_limit(limit),),
             ).fetchall()
         else:
             rows = reader.execute(
                 f"SELECT {_JOB_COLUMNS} FROM jobs WHERE state = ? "
-                "ORDER BY job_id DESC LIMIT ?",
+                "ORDER BY created_at_ms DESC, job_id DESC LIMIT ?",
                 (state, _limit(limit)),
             ).fetchall()
     finally:
@@ -346,7 +399,7 @@ async def list_tasks(
     job_id: str,
     _: ClientAuth,
     svc: Annotated[Services, Depends(services)],
-    state: Annotated[str | None, Query()] = None,
+    state: Annotated[TaskState | None, Query()] = None,
     limit: Annotated[int | None, Query(ge=1)] = None,
 ) -> TaskList:
     reader = svc.db.read()

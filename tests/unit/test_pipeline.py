@@ -12,7 +12,7 @@ import pytest
 
 from rtlfarm.expand import pipeline
 from rtlfarm.expand.pipeline import PipelineError, parse_pipeline
-from rtlfarm.models import MAX_SEED
+from rtlfarm.models import MAX_SEED, MAX_SEEDS_PER_TARGET
 
 ################################################################################
 # A Valid Pipeline to Mutate
@@ -310,9 +310,44 @@ def test_self_dependency_is_a_cycle() -> None:
     assert _pointers(data) == ["/stages"]
 
 
-def test_fan_out_stage_without_targets() -> None:
+def test_targeted_stages_without_targets() -> None:
     data = _mutate(["targets"], [])
-    assert _pointers(data) == ["/stages/simulate/fan_out"]
+    assert _pointers(data) == [
+        "/stages/compile/per_target",
+        "/stages/simulate/fan_out",
+    ]
+
+
+def test_depends_on_listed_twice() -> None:
+    data = _mutate(["stages", "simulate", "depends_on"], ["compile", "compile"])
+    assert _pointers(data) == ["/stages/simulate/depends_on/1"]
+
+
+def test_empty_stages_are_rejected() -> None:
+    data = _mutate(["stages"], {})
+    assert _pointers(data) == ["/stages"]
+
+
+def test_pinned_toolchain_digest_must_be_a_sha256() -> None:
+    data = _mutate(["toolchain", "digest"], "any")
+    assert _pointers(data) == ["/toolchain/digest"]
+    assert (
+        parse_pipeline(_mutate(["toolchain", "digest"], "e" * 64)).toolchain.digest
+        == "e" * 64
+    )
+
+
+def test_seed_count_is_capped() -> None:
+    assert _pointers(
+        _mutate(["targets", 0, "seeds"], {"n": MAX_SEEDS_PER_TARGET + 1, "base": 1})
+    ) == ["/targets/0/seeds"]
+    assert _pointers(
+        _mutate(["targets", 1, "seeds"], list(range(1, MAX_SEEDS_PER_TARGET + 2)))
+    ) == ["/targets/1/seeds"]
+    p = parse_pipeline(
+        _mutate(["targets", 0, "seeds"], {"n": MAX_SEEDS_PER_TARGET, "base": 1})
+    )
+    assert len(p.targets[0].seeds) == MAX_SEEDS_PER_TARGET
 
 
 def test_per_target_and_fan_out_are_exclusive() -> None:

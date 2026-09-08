@@ -154,7 +154,8 @@ def expand(
     retries = pipeline.policies.retries
     by_stage: dict[str, list[TaskSpec]] = {}
     tasks: list[TaskSpec] = []
-    for name, stage in pipeline.stages.items():
+    for name in _stage_order(pipeline.stages):
+        stage = pipeline.stages[name]
         stage_tasks: list[TaskSpec] = []
         for target, seed in _instances(stage, targets):
             deps = _dependencies(stage, target, by_stage)
@@ -189,6 +190,23 @@ def expand(
     )
 
 
+def _stage_order(stages: dict[str, Stage]) -> list[str]:
+    """Stages with every dependency before them, keeping declaration order
+    wherever the dependencies allow it. The validator has already rejected
+    cycles and unknown stages, so this always terminates with every stage."""
+    ordered: list[str] = []
+    remaining = list(stages)
+    while remaining:
+        ready = next(
+            name
+            for name in remaining
+            if all(dep in ordered for dep in stages[name].depends_on)
+        )
+        ordered.append(ready)
+        remaining.remove(ready)
+    return ordered
+
+
 def _instances(
     stage: Stage, targets: list[Target]
 ) -> Iterable[tuple[Target | None, int]]:
@@ -219,7 +237,7 @@ def _dependencies(
                 deps.extend(same_target)
                 continue
         deps.extend(t.task_id for t in candidates)
-    return deps
+    return list(dict.fromkeys(deps))
 
 
 def _timeout(stage: Stage, target: Target | None) -> int:

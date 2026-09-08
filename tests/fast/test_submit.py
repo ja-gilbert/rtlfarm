@@ -5,6 +5,7 @@ and the read routes for jobs and tasks.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from pathlib import Path
@@ -14,7 +15,7 @@ import httpx
 import pytest
 
 from rtlfarm.clock import DrivenClock
-from rtlfarm.config import Config, ToolchainConfig
+from rtlfarm.config import BlobsConfig, Config, ToolchainConfig
 from rtlfarm.control import app as control_app
 from rtlfarm.control.blobstore import BlobStore
 from rtlfarm.control.invariants import check_invariants
@@ -258,6 +259,20 @@ async def test_replay_with_the_same_key_returns_the_original_job(
     assert _count(db, "jobs") == 1
 
 
+async def test_an_empty_idempotency_key_is_no_key(
+    client: httpx.AsyncClient,
+    as_client: dict[str, str],
+    uploaded: Manifest,
+    db: Database,
+) -> None:
+    headers = as_client | {"Idempotency-Key": ""}
+    first = await client.post("/v1/jobs", json=_body(uploaded), headers=headers)
+    second = await client.post("/v1/jobs", json=_body(uploaded), headers=headers)
+    assert (first.status_code, second.status_code) == (201, 201)
+    assert first.json()["job_id"] != second.json()["job_id"]
+    assert _count(db, "jobs", "idempotency_key IS NOT NULL") == 0
+
+
 async def test_same_key_for_different_work_is_a_conflict(
     client: httpx.AsyncClient,
     as_client: dict[str, str],
@@ -278,6 +293,43 @@ async def test_same_key_for_different_work_is_a_conflict(
 ################################################################################
 # Toolchain Digest Resolution
 ################################################################################
+
+
+async def test_a_pipeline_pin_that_is_not_a_sha256_is_a_validation_error(
+    client: httpx.AsyncClient, as_client: dict[str, str], uploaded: Manifest
+) -> None:
+    body = _body(uploaded)
+    del body["toolchain_digest"]
+    body["manifest"]["pipeline"]["toolchain"] = {"digest": "any"}
+    response = await client.post("/v1/jobs", json=body, headers=as_client)
+    assert response.status_code == 422
+    error = response.json()["error"]
+    assert error["code"] == "VALIDATION"
+    assert error["details"][0]["pointer"] == "/manifest/pipeline/toolchain/digest"
+
+
+async def test_a_configured_pin_that_is_not_a_sha256_is_unpinned(
+    tmp_path: Path, clock: DrivenClock, manifest: Manifest
+) -> None:
+    config = Config(client_token="c", toolchain=ToolchainConfig(digest="any"))
+    db = Database(tmp_path / "bad.db", synchronous="OFF")
+    db.migrate(clock)
+    app = control_app.create_app(
+        config, db, BlobStore(tmp_path / "b", config.blobs), clock
+    )
+    headers = {"Authorization": "Bearer c"}
+    try:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://x") as c:
+            await _upload_inputs(c, headers, EXAMPLES / "fake_smoke", manifest)
+            body = _body(manifest)
+            del body["toolchain_digest"]
+            response = await c.post("/v1/jobs", json=body, headers=headers)
+    finally:
+        db.close()
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "TOOLCHAIN_UNPINNED"
+    assert "any" in response.json()["error"]["message"]
 
 
 async def test_unpinned_toolchain_is_rejected(
@@ -424,15 +476,123 @@ async def test_selection_narrows_the_graph(
     assert response.json()["n_tasks"] == 2
 
 
-async def test_design_pack_over_the_per_job_cap_is_413(
+async def test_declared_sizes_must_match_the_stored_blobs(
     client: httpx.AsyncClient, as_client: dict[str, str], uploaded: Manifest
 ) -> None:
     body = _body(uploaded)
-    for entry in body["manifest"]["files"]:
-        entry["size"] = 10_000  # five of these exceed the fixture's 16 KiB job cap
+    body["manifest"]["files"][1]["size"] = 1  # the blob is bigger than that
+    response = await client.post("/v1/jobs", json=body, headers=as_client)
+    assert response.status_code == 422
+    details = response.json()["error"]["details"]
+    assert details == [
+        {
+            "pointer": "/manifest/files/1/size",
+            "message": f"the stored blob is {uploaded.files[1].size} bytes",
+        }
+    ]
+
+
+async def test_design_pack_over_the_per_job_cap_is_413(
+    tmp_path: Path, clock: DrivenClock, manifest: Manifest
+) -> None:
+    """The cap is judged on stored sizes, so it cannot be dodged by lying."""
+    config = Config(
+        client_token="c",
+        blobs=BlobsConfig(input_job_bytes=100),
+        toolchain=ToolchainConfig(digest=DIGEST),
+    )
+    db = Database(tmp_path / "small.db", synchronous="OFF")
+    db.migrate(clock)
+    app = control_app.create_app(
+        config, db, BlobStore(tmp_path / "b", config.blobs), clock
+    )
+    headers = {"Authorization": "Bearer c"}
+    try:
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://x") as c:
+            await _upload_inputs(c, headers, EXAMPLES / "fake_smoke", manifest)
+            response = await c.post("/v1/jobs", json=_body(manifest), headers=headers)
+    finally:
+        db.close()
+    assert response.status_code == 413
+    error = response.json()["error"]
+    assert error["code"] == "PAYLOAD_TOO_LARGE"
+    assert error["details"] == {"kind": "input", "cap": 100}
+
+
+async def test_an_input_over_the_per_file_cap_is_413_whatever_kind_uploaded_it(
+    client: httpx.AsyncClient, as_client: dict[str, str], uploaded: Manifest
+) -> None:
+    big = b"z" * 5000  # over the fixture's 4096-byte input cap
+    digest = hashlib.sha256(big).hexdigest()
+    stored = await client.post(
+        "/v1/blobs",
+        content=big,
+        headers=as_client | {"X-Content-Sha256": digest, "X-Blob-Kind": "compiled"},
+    )
+    assert stored.status_code == 201
+    body = _body(uploaded)
+    body["manifest"]["files"][0] |= {"sha256": digest, "size": 5000}
     response = await client.post("/v1/jobs", json=body, headers=as_client)
     assert response.status_code == 413
-    assert response.json()["error"]["code"] == "PAYLOAD_TOO_LARGE"
+    assert response.json()["error"]["details"] == {"kind": "input", "cap": 4096}
+
+
+async def test_manifest_paths_must_be_plain_relative_paths(
+    client: httpx.AsyncClient, as_client: dict[str, str], uploaded: Manifest
+) -> None:
+    for bad in ("../escape.txt", "/etc/passwd", "", "src\\x.txt", "a/./b", "x/"):
+        body = _body(uploaded)
+        body["manifest"]["files"][0]["path"] = bad
+        response = await client.post("/v1/jobs", json=body, headers=as_client)
+        assert response.status_code == 422, bad
+        pointers = {d["pointer"] for d in response.json()["error"]["details"]}
+        assert "/body/manifest/files/0/path" in pointers, bad
+
+
+async def test_stage_timeouts_are_checked_against_the_timing_constants(
+    client: httpx.AsyncClient, as_client: dict[str, str], uploaded: Manifest
+) -> None:
+    body = _body(uploaded)
+    body["manifest"]["pipeline"]["stages"]["compile"]["timeout_s"] = 1
+    response = await client.post("/v1/jobs", json=body, headers=as_client)
+    assert response.status_code == 422
+    detail = response.json()["error"]["details"][0]
+    assert detail["pointer"] == "/manifest/pipeline/stages"
+    assert "kill_grace_s" in detail["message"]
+
+
+async def test_stage_declared_before_its_dependency_is_accepted(
+    client: httpx.AsyncClient, as_client: dict[str, str], uploaded: Manifest
+) -> None:
+    body = _body(uploaded)
+    stages = body["manifest"]["pipeline"]["stages"]
+    body["manifest"]["pipeline"]["stages"] = {
+        "simulate": stages["simulate"],
+        "compile": stages["compile"],
+    }
+    response = await client.post("/v1/jobs", json=body, headers=as_client)
+    assert response.status_code == 201
+    job_id = response.json()["job_id"]
+    detail = (
+        await client.get(f"/v1/tasks/{job_id}.simulate.t_a.s1", headers=as_client)
+    ).json()
+    assert detail["depends_on"] == [f"{job_id}.compile.t_a.s0"]
+
+
+async def test_duplicate_dependency_is_a_pipeline_error_not_a_crash(
+    client: httpx.AsyncClient, as_client: dict[str, str], uploaded: Manifest
+) -> None:
+    body = _body(uploaded)
+    body["manifest"]["pipeline"]["stages"]["simulate"]["depends_on"] = [
+        "compile",
+        "compile",
+    ]
+    response = await client.post("/v1/jobs", json=body, headers=as_client)
+    assert response.status_code == 422
+    assert response.json()["error"]["details"][0]["pointer"] == (
+        "/manifest/pipeline/stages/simulate/depends_on/1"
+    )
 
 
 async def test_submit_needs_the_client_token(
@@ -515,6 +675,18 @@ async def test_job_list_is_newest_first_with_state_filter_and_limit(
     ]
     assert none == []
     assert job_routes._limit(10_000) == job_routes.LIST_LIMIT_CAP
+
+
+async def test_a_state_filter_outside_the_vocabulary_is_422(
+    client: httpx.AsyncClient, as_client: dict[str, str], uploaded: Manifest
+) -> None:
+    job_id = (
+        await client.post("/v1/jobs", json=_body(uploaded), headers=as_client)
+    ).json()["job_id"]
+    for path in ("/v1/jobs?state=running", f"/v1/jobs/{job_id}/tasks?state=DONE"):
+        response = await client.get(path, headers=as_client)
+        assert response.status_code == 422, path
+        assert response.json()["error"]["details"][0]["pointer"] == "/query/state"
 
 
 async def test_unknown_job_and_task_are_404(

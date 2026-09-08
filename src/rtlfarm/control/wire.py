@@ -7,13 +7,31 @@ read routes promise; the OpenAPI document is generated from them.
 
 from __future__ import annotations
 
-from typing import Annotated, Any, Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from rtlfarm.models import MAX_SEED, Name, Role
+from rtlfarm.models import MAX_SEED, Name, Role, Sha256
 
-Sha256 = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
+#: SQLite stores INTEGER as a signed 64-bit value; larger is a request error.
+MAX_INT = 2**63 - 1
+
+#: The most files one design pack may declare.
+MAX_MANIFEST_FILES = 20_000
+
+JobState = Literal["SUBMITTED", "RUNNING", "SUCCEEDED", "FAILED", "CANCELED"]
+TaskState = Literal[
+    "PENDING",
+    "READY",
+    "LEASED",
+    "RUNNING",
+    "SUCCEEDED",
+    "FAILED",
+    "TIMED_OUT",
+    "INFRA_FAILED",
+    "SKIPPED",
+    "CANCELED",
+]
 
 
 class _Request(BaseModel):
@@ -21,17 +39,33 @@ class _Request(BaseModel):
 
 
 class ManifestEntryBody(_Request):
-    path: str
+    path: str = Field(min_length=1)
     role: Role
-    ordinal: int = Field(ge=0)
+    ordinal: int = Field(ge=0, le=MAX_INT)
     sha256: Sha256
-    size: int = Field(ge=0)
+    size: int = Field(ge=0, le=MAX_INT)
+
+    @field_validator("path")
+    @classmethod
+    def _pack_relative(cls, value: str) -> str:
+        """The same rules a pack obeys: relative, forward-slash, no ``.`` or ``..``.
+
+        Segments are checked raw rather than through ``PurePosixPath``, which
+        would silently drop a ``.`` segment before it could be seen.
+        """
+        if "\\" in value or "\x00" in value:
+            raise ValueError("must use forward slashes and contain no NUL")
+        if any(segment in ("", ".", "..") for segment in value.split("/")):
+            raise ValueError(
+                "must be a relative path with no empty, '.' or '..' segments"
+            )
+        return value
 
 
 class ManifestBody(_Request):
     manifest_version: Literal[1]
     design: Name
-    files: list[ManifestEntryBody]
+    files: list[ManifestEntryBody] = Field(max_length=MAX_MANIFEST_FILES)
     #: Validated by the pipeline validator so its errors carry pointers.
     pipeline: dict[str, Any]
 

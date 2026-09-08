@@ -106,6 +106,10 @@ def _semantic_issues(p: Pipeline) -> Iterable[PipelineIssue]:
             yield PipelineIssue(base, "per_target and fan_out are exclusive")
         if stage.fan_out is not None and not p.targets:
             yield PipelineIssue(f"{base}/fan_out", "a fan-out stage needs targets")
+        if stage.per_target and not p.targets:
+            yield PipelineIssue(
+                f"{base}/per_target", "a per-target stage needs targets"
+            )
         if name == "coverage" and stage.tool == "iverilog":
             yield PipelineIssue(f"{base}/tool", "coverage is not available on iverilog")
         for j, role in enumerate(stage.consumes):
@@ -122,6 +126,10 @@ def _semantic_issues(p: Pipeline) -> Iterable[PipelineIssue]:
         for j, dep in enumerate(stage.depends_on):
             if dep not in p.stages:
                 yield PipelineIssue(f"{base}/depends_on/{j}", f"unknown stage {dep!r}")
+            elif dep in stage.depends_on[:j]:
+                yield PipelineIssue(
+                    f"{base}/depends_on/{j}", f"{dep!r} is listed twice"
+                )
     if _has_cycle(p.stages):
         yield PipelineIssue("/stages", "depends_on forms a cycle")
     for name in p.policies.cache:

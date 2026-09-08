@@ -35,6 +35,12 @@ ARTIFACT_KINDS: tuple[str, ...] = ("compiled",)
 #: The largest legal seed: the testbench reads it into a 32-bit integer.
 MAX_SEED = 2**31 - 1
 
+#: The most seeds one target may run; a range larger than this is a mistake.
+MAX_SEEDS_PER_TARGET = 10_000
+
+#: A hex SHA-256, the form of every digest in the system.
+Sha256 = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
+
 #: Plusargs the runner injects; a target may not set them.
 RESERVED_PLUSARGS: frozenset[str] = frozenset({"seed", "dump"})
 
@@ -60,7 +66,7 @@ class Design(_Frozen):
 
 
 class Toolchain(_Frozen):
-    digest: str | None = None
+    digest: Sha256 | None = None
 
 
 class Target(_Frozen):
@@ -69,7 +75,7 @@ class Target(_Frozen):
     tb: list[str] = Field(default_factory=list)
     data: list[str] = Field(default_factory=list)
     seeds: list[Annotated[int, Field(ge=1, le=MAX_SEED)]] = Field(
-        default_factory=lambda: [1]
+        default_factory=lambda: [1], max_length=MAX_SEEDS_PER_TARGET
     )
     tags: list[Name] = Field(default_factory=list)
     timeout_sim: SimTime
@@ -90,6 +96,8 @@ class Target(_Frozen):
         n, base = value["n"], value["base"]
         if not isinstance(n, int) or isinstance(n, bool) or n < 1:
             raise ValueError("n must be an integer of at least 1")
+        if n > MAX_SEEDS_PER_TARGET:
+            raise ValueError(f"n may not exceed {MAX_SEEDS_PER_TARGET}")
         if not isinstance(base, int) or isinstance(base, bool) or base < 1:
             raise ValueError("base must be an integer of at least 1 (0 is reserved)")
         return list(range(base, base + n))
@@ -121,7 +129,7 @@ class Pipeline(_Frozen):
     design: Design
     toolchain: Toolchain = Toolchain()
     targets: list[Target] = Field(default_factory=list)
-    stages: dict[str, Stage]
+    stages: dict[str, Stage] = Field(min_length=1)
     policies: Policies = Policies()
 
     def stage_timeouts(self) -> list[int]:
