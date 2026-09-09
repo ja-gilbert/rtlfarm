@@ -44,6 +44,14 @@ def test_a_missing_verb_or_command_is_a_usage_error(
     assert "usage: rtlfarm" in capsys.readouterr().err
 
 
+def test_an_unknown_flag_is_a_usage_error(capsys: pytest.CaptureFixture[str]) -> None:
+    """A mistyped flag exits 2 with the usage line instead of running the verb."""
+    with pytest.raises(SystemExit) as info:
+        main(["control", "run", "--prot", "8080"])
+    assert info.value.code == 2
+    assert "usage: rtlfarm" in capsys.readouterr().err
+
+
 def test_installed_console_script_runs() -> None:
     exe = shutil.which("rtlfarm")
     assert exe is not None, "rtlfarm is not on PATH; run under `uv run`"
@@ -359,7 +367,8 @@ def test_an_operator_mistake_is_one_line_on_stderr_and_exit_one(
     (tmp_path / "afile").write_text("", encoding="utf-8")
     monkeypatch.setenv(variable, value)
     assert main(argv) == 1
-    assert names in capsys.readouterr().err
+    (line,) = capsys.readouterr().err.splitlines()
+    assert names in line
     assert served == []
     assert not (tmp_path / "data").exists()
 

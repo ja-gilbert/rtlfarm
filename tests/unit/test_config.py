@@ -196,15 +196,16 @@ def test_every_key_loads_from_env(
 
 
 def test_env_overrides_toml_and_flags_override_env(tmp_path: Path) -> None:
+    """Each layer beats the one before it, and flags reach every section."""
     toml = _write_toml(tmp_path, "[timing]\nlease_ttl_s = 45\n")
     env = {"RTLFARM_TIMING__LEASE_TTL_S": "60"}
 
     assert load_config(toml_path=toml, env={}).timing.lease_ttl_s == 45.0
     assert load_config(toml_path=toml, env=env).timing.lease_ttl_s == 60.0
-    flags = {"timing.lease_ttl_s": 75.0}
-    assert (
-        load_config(toml_path=toml, env=env, overrides=flags).timing.lease_ttl_s == 75.0
-    )
+    flags = {"timing.lease_ttl_s": 75.0, "blobs.log_bytes": 7, "client_token": "c"}
+    config = load_config(toml_path=toml, env=env, overrides=flags)
+    assert (config.timing.lease_ttl_s, config.blobs.log_bytes) == (75.0, 7)
+    assert config.client_token == "c"
 
 
 def test_layers_merge_key_by_key(tmp_path: Path) -> None:
@@ -471,6 +472,7 @@ def test_all_violations_are_reported_together() -> None:
     message = str(info.value)
     assert "worker_dead_after_s" in message
     assert "tick_s" in message
+    assert message.splitlines() == [message]  # the CLI prints it as one line
 
 
 positive = st.floats(

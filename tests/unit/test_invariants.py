@@ -213,7 +213,8 @@ def test_leased_task_without_a_matching_active_attempt(
 
 
 def test_leased_task_with_two_active_attempts(db: Database) -> None:
-    """Exactly one ACTIVE attempt: the extra one is reported by name."""
+    """Exactly one ACTIVE attempt: both halves of the rule fire, and the extra
+    attempt is reported by name."""
     _run(
         db,
         _job(),
@@ -223,7 +224,7 @@ def test_leased_task_with_two_active_attempts(db: Database) -> None:
         _event("t", 1, "RUNNING"),
     )
     violations = _check(db)
-    assert {v.invariant for v in violations} == {2}
+    assert [v.invariant for v in violations] == [2, 2]
     assert any("a-2" in v.message for v in violations)
 
 

@@ -68,10 +68,11 @@ def test_task_id_rejects_a_part_that_would_make_an_unsafe_id(
         ids.task_id(job, stage, target, seed)
 
 
-def test_every_stage_kind_is_admitted_by_the_schema() -> None:
-    """The pipeline validator accepts exactly ``ids.STAGE_KINDS``; each of them
-    must also pass the tasks table's CHECK, or a valid pipeline would fail at
-    insert. The schema may admit more (the Preferred wave kinds)."""
+def test_stage_kinds_are_the_core_set_and_the_schema_admits_each() -> None:
+    """The stage vocabulary a pipeline may use is exactly the four Core kinds of
+    spec §12.2, and each must pass the tasks table's CHECK or a valid pipeline
+    would fail at insert. The schema may admit more (the Preferred wave kinds)."""
+    assert ids.STAGE_KINDS == ("lint", "compile", "simulate", "coverage")
     (first,) = [m for m in load_migrations() if m.version == 1]
     check = re.search(r"CHECK\(stage_kind IN \(([^)]*)\)\)", first.sql)
     assert check is not None
