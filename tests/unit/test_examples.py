@@ -75,32 +75,6 @@ def test_expansion_matches_the_snapshot(name: str, selection: str) -> None:
 ################################################################################
 
 
-def test_fake_smoke_is_two_targets_over_the_fake_tool() -> None:
-    m = pack(EXAMPLES / "fake_smoke")
-    assert m.design == "fake_smoke"
-    assert [f.path for f in m.files] == [
-        "src/design.txt",
-        "tb/t_a.txt",
-        "tb/t_b.txt",
-        "data/t_a.txt",
-        "data/t_b.txt",
-    ]
-    assert {s.tool for s in m.pipeline.stages.values()} == {"fake"}
-    job = expand(m, Selection(), job_id=JOB, priority=5, toolchain_digest=DIGEST)
-    assert [t.stage_kind for t in job.tasks] == ["compile"] * 2 + ["simulate"] * 5
-
-
-def test_counter_is_lint_compile_simulate_over_icarus() -> None:
-    m = pack(EXAMPLES / "counter")
-    assert m.design == "counter"
-    assert m.paths("rtl") == ["rtl/counter.sv"]
-    assert m.paths("include") == ["tb/rtlfarm_tb.svh"]
-    assert m.paths("tb") == ["tb/tb_counter.sv"]
-    assert list(m.pipeline.stages) == ["lint", "compile", "simulate"]
-    job = expand(m, Selection(), job_id=JOB, priority=5, toolchain_digest=DIGEST)
-    assert [t.seed for t in job.tasks if t.stage_kind == "simulate"] == [1, 2, 3]
-
-
 def test_counter_ships_the_testbench_header_verbatim() -> None:
     shipped = (files("rtlfarm.tools") / "rtlfarm_tb.svh").read_bytes()
     packed = (EXAMPLES / "counter" / "tb" / "rtlfarm_tb.svh").read_bytes()

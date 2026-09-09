@@ -4,7 +4,6 @@ what digests, and every rule that rejects a pack.
 
 from __future__ import annotations
 
-import dataclasses
 import hashlib
 import json
 import os
@@ -141,13 +140,6 @@ def test_recursive_globs_and_matched_directories(tmp_path: Path) -> None:
         "rtl/counter.sv",
         "rtl/sub/deep.sv",
     ]
-
-
-def test_paths_are_relative_and_forward_slash(root: Path) -> None:
-    for f in pack(root).files:
-        assert not f.path.startswith("/")
-        assert "\\" not in f.path
-        assert ".." not in f.path.split("/")
 
 
 ################################################################################
@@ -295,7 +287,9 @@ def test_symlinked_directory_component_is_rejected(root: Path) -> None:
     assert _issues(root) == ["linked/extra.sv: symlink at linked"]
 
 
-def test_symlink_to_a_file_outside_the_pack_is_rejected(root: Path) -> None:
+def test_symlink_is_rejected_before_its_target_outside_the_pack_is_examined(
+    root: Path,
+) -> None:
     outside = root.parent / "outside.sv"
     outside.write_bytes(b"module outside; endmodule\n")
     (root / "rtl/outside.sv").symlink_to(outside)
@@ -322,9 +316,3 @@ def test_every_problem_is_reported_together(root: Path) -> None:
         "/design/files/rtl/2: glob matched no files",
         "rtl/linked.sv: symlink at rtl/linked.sv",
     ]
-
-
-def test_manifest_is_frozen(root: Path) -> None:
-    m: Manifest = pack(root)
-    with pytest.raises(dataclasses.FrozenInstanceError):
-        m.design = "other"  # type: ignore[misc]

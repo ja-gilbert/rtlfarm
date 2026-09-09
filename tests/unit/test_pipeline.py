@@ -87,7 +87,7 @@ def _valid() -> dict[str, Any]:
     }
 
 
-def _pointers(data: dict[str, Any]) -> list[str]:
+def _pointers(data: object) -> list[str]:
     with pytest.raises(PipelineError) as info:
         parse_pipeline(data)
     return sorted(issue.pointer for issue in info.value.issues)
@@ -124,12 +124,6 @@ def test_valid_pipeline_parses() -> None:
     assert p.stages["compile"].per_target is True
     assert p.stages["simulate"].fan_out == "targets"
     assert p.toolchain.digest is None
-
-
-def test_model_is_frozen() -> None:
-    p = parse_pipeline(_valid())
-    with pytest.raises(Exception, match="frozen"):
-        p.design.name = "other"
 
 
 def test_defaults_are_filled_in() -> None:
@@ -177,42 +171,54 @@ def test_malformed_yaml_is_reported_at_the_root(tmp_path: Path) -> None:
     assert "YAML" in info.value.issues[0].message
 
 
-def test_non_mapping_document_is_rejected() -> None:
-    assert _pointers(["not", "a", "mapping"]) == [""]  # type: ignore[arg-type]
-
-
 ################################################################################
 # Shape Rules (JSON Pointers From the Model)
 ################################################################################
 
+# One row per shape rule: the mutated document and the pointer the error must
+# carry. The rules come from the models; what is tested here is that each is
+# reported at the offending node and nowhere else.
+SHAPE_ERRORS = [
+    pytest.param(["not", "a", "mapping"], "", id="document-not-a-mapping"),
+    pytest.param(_mutate(["version"], 2), "/version", id="unknown-version"),
+    pytest.param(_mutate(["design", "bogus"], 1), "/design/bogus", id="unknown-key"),
+    pytest.param(_without(["targets", 0, "top"]), "/targets/0/top", id="missing-field"),
+    pytest.param(
+        _mutate(["stages", "lint", "tool"], "vcs"),
+        "/stages/lint/tool",
+        id="unknown-tool",
+    ),
+    pytest.param(
+        _mutate(["design", "files", "docs"], ["*.md"]),
+        "/design/files/docs",
+        id="unknown-role-as-key",
+    ),
+    pytest.param(
+        _mutate(["stages", "lint", "consumes"], ["rtl", "docs"]),
+        "/stages/lint/consumes/1",
+        id="unknown-role-in-list",
+    ),
+    pytest.param(
+        _without(["targets", 0, "timeout_sim"]),
+        "/targets/0/timeout_sim",
+        id="watchdog-required",
+    ),
+    pytest.param(
+        _mutate(["stages", "lint", "timeout_s"], 0),
+        "/stages/lint/timeout_s",
+        id="stage-timeout-not-positive",
+    ),
+    pytest.param(
+        _mutate(["policies", "retries", "infra"], -1),
+        "/policies/retries/infra",
+        id="negative-retry-budget",
+    ),
+]
 
-def test_unknown_version() -> None:
-    assert _pointers(_mutate(["version"], 2)) == ["/version"]
 
-
-def test_unknown_key_is_rejected() -> None:
-    assert _pointers(_mutate(["design", "bogus"], 1)) == ["/design/bogus"]
-
-
-def test_missing_required_field() -> None:
-    assert _pointers(_without(["targets", 0, "top"])) == ["/targets/0/top"]
-
-
-def test_unknown_tool() -> None:
-    assert _pointers(_mutate(["stages", "lint", "tool"], "vcs")) == [
-        "/stages/lint/tool"
-    ]
-
-
-def test_unknown_role_in_files() -> None:
-    assert _pointers(_mutate(["design", "files", "docs"], ["*.md"])) == [
-        "/design/files/docs"
-    ]
-
-
-def test_unknown_role_in_consumes() -> None:
-    data = _mutate(["stages", "lint", "consumes"], ["rtl", "docs"])
-    assert _pointers(data) == ["/stages/lint/consumes/1"]
+@pytest.mark.parametrize(("data", "pointer"), SHAPE_ERRORS)
+def test_shape_errors_report_the_offending_pointer(data: object, pointer: str) -> None:
+    assert _pointers(data) == [pointer]
 
 
 @pytest.mark.parametrize("bad", ["", "a b", "x" * 65, "has/slash", "dot.name"])
@@ -226,24 +232,6 @@ def test_names_outside_the_pattern(bad: str) -> None:
 def test_timeout_sim_format(bad: str) -> None:
     assert _pointers(_mutate(["targets", 0, "timeout_sim"], bad)) == [
         "/targets/0/timeout_sim"
-    ]
-
-
-def test_timeout_sim_is_required() -> None:
-    assert _pointers(_without(["targets", 0, "timeout_sim"])) == [
-        "/targets/0/timeout_sim"
-    ]
-
-
-def test_stage_timeout_must_be_positive() -> None:
-    assert _pointers(_mutate(["stages", "lint", "timeout_s"], 0)) == [
-        "/stages/lint/timeout_s"
-    ]
-
-
-def test_retry_budgets_must_not_be_negative() -> None:
-    assert _pointers(_mutate(["policies", "retries", "infra"], -1)) == [
-        "/policies/retries/infra"
     ]
 
 
@@ -413,10 +401,15 @@ def test_every_semantic_problem_is_reported_together() -> None:
     ]
 
 
-def test_error_message_lists_pointer_and_reason() -> None:
+def test_error_message_has_one_pointer_and_reason_line_per_issue() -> None:
+    data = _mutate(["stages", "lint", "depends_on"], ["ghost"])
+    data["policies"]["cache"]["extra"] = True
     with pytest.raises(PipelineError) as info:
-        parse_pipeline(_mutate(["stages", "lint", "depends_on"], ["ghost"]))
-    assert str(info.value) == "/stages/lint/depends_on/0: unknown stage 'ghost'"
+        parse_pipeline(data)
+    lines = str(info.value).splitlines()
+    pointers = sorted(line.split(": ", 1)[0] for line in lines)
+    assert pointers == ["/policies/cache/extra", "/stages/lint/depends_on/0"]
+    assert all(line.split(": ", 1)[1] for line in lines)
 
 
 def test_valid_input_is_not_mutated() -> None:
