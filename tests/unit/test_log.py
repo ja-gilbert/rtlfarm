@@ -1,4 +1,5 @@
-"""Structured JSON logging."""
+"""Structured JSON logging: the line shape, the level threshold, and who owns
+the root handlers."""
 
 from __future__ import annotations
 
@@ -54,21 +55,24 @@ def test_every_line_carries_the_fixed_fields(
     assert record["task_id"] == "t1"
     assert record["job_id"] is None
     assert record["slots"] == 2
-
-
-def test_timestamp_is_iso8601_utc(logger: log.EventLogger, stream: io.StringIO) -> None:
-    logger.info("tick")
-    ts = _only_line(stream)["ts"]
+    ts = record["ts"]
     assert isinstance(ts, str)
-    parsed = datetime.fromisoformat(ts)
-    assert parsed.utcoffset() == timedelta(0)
+    assert datetime.fromisoformat(ts).utcoffset() == timedelta(0)
 
 
-def test_levels_below_the_threshold_are_dropped(
-    logger: log.EventLogger, stream: io.StringIO
+@pytest.mark.parametrize(
+    ("level", "emitted"),
+    [(logging.DEBUG, True), (logging.WARNING, False)],
+    ids=["debug-threshold-emits-info", "warning-threshold-drops-info"],
+)
+def test_the_configured_level_is_the_threshold(
+    stream: io.StringIO, level: int, emitted: bool
 ) -> None:
-    logger.debug("noise")
-    assert stream.getvalue() == ""
+    """The level given to configure_logging decides what is emitted, in both
+    directions; the root logger's own default (WARNING) does not."""
+    log.configure_logging(service="control", stream=stream, level=level)
+    log.get_logger("rtlfarm.test").info("started")
+    assert (stream.getvalue() != "") is emitted
 
 
 def test_warning_and_error_levels(logger: log.EventLogger, stream: io.StringIO) -> None:
@@ -143,7 +147,10 @@ def test_fixed_keys_cannot_be_overwritten_by_fields(
 def test_default_stream_is_resolved_at_call_time(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A stdout swapped in after import (as pytest does) still receives events."""
+    """A stdout swapped in after import (as pytest does) still receives events.
+
+    Regression: the stream was bound at import time until 0fd4037 (RC-04).
+    """
     replacement = io.StringIO()
     monkeypatch.setattr(sys, "stdout", replacement)
     log.configure_logging("svc")

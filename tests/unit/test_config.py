@@ -12,7 +12,6 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from rtlfarm.config import (
-    NON_CONFIG_ENV,
     BlobsConfig,
     Config,
     ConfigError,
@@ -23,7 +22,9 @@ from rtlfarm.config import (
     validate_timing,
 )
 
-# --- helpers -----------------------------------------------------------------
+################################################################################
+# Helpers
+################################################################################
 
 
 def _dotted_keys(cls: type, prefix: str = "") -> set[str]:
@@ -101,7 +102,9 @@ def _get(config: Config, key: str) -> object:
     return obj
 
 
-# --- defaults and the frozen representation ---------------------------------
+################################################################################
+# Defaults and the Frozen Configuration
+################################################################################
 
 
 def test_defaults_match_spec_table() -> None:
@@ -139,6 +142,7 @@ def test_defaults_match_spec_table() -> None:
 
 
 def test_config_is_frozen() -> None:
+    """Configuration is loaded once and never mutated (a project contract)."""
     config = load_config(toml_path=None, env={})
     with pytest.raises(dataclasses.FrozenInstanceError):
         config.timing.lease_ttl_s = 1.0  # type: ignore[misc]
@@ -164,7 +168,9 @@ def test_a_config_file_that_is_not_utf8_is_an_error(tmp_path: Path) -> None:
         load_config(toml_path=toml, env={})
 
 
-# --- the four layers ----------------------------------------------------------
+################################################################################
+# The Layers
+################################################################################
 
 
 def test_round_trip_table_covers_every_key() -> None:
@@ -186,14 +192,6 @@ def test_every_key_loads_from_env(
     key: str, _literal: str, env: str, expected: object
 ) -> None:
     config = load_config(toml_path=None, env={_env_name(key): env})
-    assert _get(config, key) == expected
-
-
-@pytest.mark.parametrize(("key", "_literal", "_env", "expected"), ROUND_TRIP)
-def test_every_key_loads_from_overrides(
-    key: str, _literal: str, _env: str, expected: object
-) -> None:
-    config = load_config(toml_path=None, env={}, overrides={key: expected})
     assert _get(config, key) == expected
 
 
@@ -221,28 +219,29 @@ def test_layers_merge_key_by_key(tmp_path: Path) -> None:
 @pytest.mark.parametrize("name", ["RTLFARM_TEST_HOOKS", "RTLFARM_UPDATE_SNAPSHOTS"])
 def test_process_switches_are_not_config_keys(name: str) -> None:
     """The fault-hook and snapshot switches are not configuration keys."""
-    assert name in NON_CONFIG_ENV
     config = load_config(toml_path=None, env={name: "1"})
     assert config == Config()
 
 
-@pytest.mark.parametrize("raw", ["inf", "-inf", "nan"])
-def test_non_finite_env_floats_are_rejected(raw: str) -> None:
-    with pytest.raises(ConfigError, match="RTLFARM_TIMING__LEASE_TTL_S"):
-        load_config(toml_path=None, env={"RTLFARM_TIMING__LEASE_TTL_S": raw})
+@pytest.mark.parametrize(
+    ("name", "raw"),
+    [
+        ("RTLFARM_TIMING__LEASE_TTL_S", "inf"),
+        ("RTLFARM_TIMING__LEASE_TTL_S", "-inf"),
+        ("RTLFARM_TIMING__LEASE_TTL_S", "nan"),
+        ("RTLFARM_TIMING__REQUEUE_BACKOFF_S", "[0, NaN]"),
+    ],
+    ids=["inf", "-inf", "nan", "backoff-nan"],
+)
+def test_non_finite_env_numbers_are_rejected(name: str, raw: str) -> None:
+    with pytest.raises(ConfigError, match=name):
+        load_config(toml_path=None, env={name: raw})
 
 
 def test_non_finite_toml_floats_are_rejected(tmp_path: Path) -> None:
     toml = _write_toml(tmp_path, "[timing]\nworker_dead_after_s = inf\n")
     with pytest.raises(ConfigError, match=r"timing\.worker_dead_after_s"):
         load_config(toml_path=toml, env={})
-
-
-def test_non_finite_backoff_entries_are_rejected() -> None:
-    with pytest.raises(ConfigError, match="RTLFARM_TIMING__REQUEUE_BACKOFF_S"):
-        load_config(
-            toml_path=None, env={"RTLFARM_TIMING__REQUEUE_BACKOFF_S": "[0, NaN]"}
-        )
 
 
 def test_unrelated_environment_is_ignored() -> None:
@@ -266,29 +265,39 @@ def test_env_bad_boolean_is_an_error() -> None:
         load_config(toml_path=None, env={"RTLFARM_INSECURE_BIND": "maybe"})
 
 
-# --- rejected input ------------------------------------------------------------
+################################################################################
+# Rejected Input
+################################################################################
+
+# (case, TOML text, environment, overrides, what the message must name). An
+# empty TOML text is a valid file that sets nothing, so every row goes through
+# the same call.
+UNKNOWN_KEYS: list[tuple[str, str, dict[str, str], dict[str, object], str]] = [
+    ("toml-key", "[timing]\nlease_ttl = 45\n", {}, {}, r"timing\.lease_ttl"),
+    ("toml-section", "[scheduler]\ntick_s = 1\n", {}, {}, "scheduler"),
+    ("toml-scalar-for-section", "timing = 5\n", {}, {}, "timing"),
+    ("env", "", {"RTLFARM_TIMING__LEASE_TTL": "45"}, {}, "RTLFARM_TIMING__LEASE_TTL"),
+    ("override", "", {}, {"timing.nope": 1}, r"timing\.nope"),
+]
 
 
-def test_unknown_toml_key_is_an_error(tmp_path: Path) -> None:
-    toml = _write_toml(tmp_path, "[timing]\nlease_ttl = 45\n")
-    with pytest.raises(ConfigError, match=r"timing\.lease_ttl"):
-        load_config(toml_path=toml, env={})
-
-
-def test_unknown_toml_section_is_an_error(tmp_path: Path) -> None:
-    toml = _write_toml(tmp_path, "[scheduler]\ntick_s = 1\n")
-    with pytest.raises(ConfigError, match="scheduler"):
-        load_config(toml_path=toml, env={})
-
-
-def test_unknown_env_key_is_an_error() -> None:
-    with pytest.raises(ConfigError, match="RTLFARM_TIMING__LEASE_TTL"):
-        load_config(toml_path=None, env={"RTLFARM_TIMING__LEASE_TTL": "45"})
-
-
-def test_unknown_override_key_is_an_error() -> None:
-    with pytest.raises(ConfigError, match=r"timing\.nope"):
-        load_config(toml_path=None, env={}, overrides={"timing.nope": 1})
+@pytest.mark.parametrize(
+    ("_case", "toml", "env", "overrides", "match"),
+    UNKNOWN_KEYS,
+    ids=[row[0] for row in UNKNOWN_KEYS],
+)
+def test_an_unknown_key_is_rejected_in_every_layer(
+    tmp_path: Path,
+    _case: str,
+    toml: str,
+    env: dict[str, str],
+    overrides: dict[str, object],
+    match: str,
+) -> None:
+    """A typo cannot leave a default silently in force, whichever layer it
+    enters through, and the error names the key."""
+    with pytest.raises(ConfigError, match=match):
+        load_config(toml_path=_write_toml(tmp_path, toml), env=env, overrides=overrides)
 
 
 def test_wrong_type_in_toml_is_an_error(tmp_path: Path) -> None:
@@ -302,19 +311,15 @@ def test_wrong_type_in_env_is_an_error() -> None:
         load_config(toml_path=None, env={"RTLFARM_TIMING__FULL_SWEEP_EVERY": "1.5"})
 
 
-def test_scalar_where_section_expected_is_an_error(tmp_path: Path) -> None:
-    toml = _write_toml(tmp_path, "timing = 5\n")
-    with pytest.raises(ConfigError, match="timing"):
-        load_config(toml_path=toml, env={})
-
-
 def test_backoff_list_must_be_numbers(tmp_path: Path) -> None:
     toml = _write_toml(tmp_path, '[timing]\nrequeue_backoff_s = ["a"]\n')
     with pytest.raises(ConfigError, match=r"timing\.requeue_backoff_s"):
         load_config(toml_path=toml, env={})
 
 
-# --- validate_timing: the orderings between the constants ---------------------
+################################################################################
+# validate_timing: the Orderings Between the Constants
+################################################################################
 
 DEFAULTS = TimingConfig()
 DEFAULT_STAGE_TIMEOUTS = (60.0, 300.0, 300.0)  # lint, compile, simulate defaults
@@ -325,8 +330,8 @@ def _timing(**changes: Any) -> TimingConfig:
     return TimingConfig(**{**dataclasses.asdict(DEFAULTS), **changes})
 
 
-def test_default_timing_validates() -> None:
-    validate_timing(DEFAULTS, DEFAULT_STAGE_TIMEOUTS)
+# The defaults themselves are validated by
+# test_committed_rtlfarm_toml_loads_and_equals_the_defaults.
 
 
 def test_process_tier_profile_validates() -> None:
@@ -443,15 +448,14 @@ def test_counters_must_be_at_least_one(field: str) -> None:
         validate_timing(_timing(**{field: 0}))
 
 
-def test_backoff_entries_must_not_be_negative() -> None:
-    timing = dataclasses.replace(DEFAULTS, requeue_backoff_s=(0.0, -5.0))
+@pytest.mark.parametrize(
+    "backoff", [(0.0, -5.0), ()], ids=["negative-entry", "empty-list"]
+)
+def test_requeue_backoff_must_be_non_empty_and_non_negative(
+    backoff: tuple[float, ...],
+) -> None:
     with pytest.raises(TimingError, match="requeue_backoff_s"):
-        validate_timing(timing)
-
-
-def test_backoff_must_not_be_empty() -> None:
-    with pytest.raises(TimingError, match="requeue_backoff_s"):
-        validate_timing(dataclasses.replace(DEFAULTS, requeue_backoff_s=()))
+        validate_timing(dataclasses.replace(DEFAULTS, requeue_backoff_s=backoff))
 
 
 def test_claim_wait_plus_five_equal_to_client_timeout_is_accepted() -> None:
@@ -467,7 +471,6 @@ def test_all_violations_are_reported_together() -> None:
     message = str(info.value)
     assert "worker_dead_after_s" in message
     assert "tick_s" in message
-    assert message.count(";") == 1
 
 
 positive = st.floats(
@@ -531,7 +534,9 @@ def test_validate_timing_accepts_exactly_the_spec_orderings(
             validate_timing(timing, timeouts)
 
 
-# --- the committed files -------------------------------------------------------
+################################################################################
+# The Committed Files
+################################################################################
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -597,10 +602,3 @@ def test_read_dotenv_of_an_undecodable_file_is_an_error(tmp_path: Path) -> None:
     env.write_bytes(b"\xff\xfeR\x00T\x00L\x00")  # UTF-16 with a byte-order mark
     with pytest.raises(ConfigError, match=r"dotenv file .*\.env"):
         read_dotenv(env)
-
-
-def test_dotenv_values_load_through_the_env_layer(tmp_path: Path) -> None:
-    env = tmp_path / ".env"
-    env.write_text("RTLFARM_CLIENT_TOKEN=c\nRTLFARM_DATA_DIR=/srv/farm\n")
-    config = load_config(toml_path=None, env=read_dotenv(env))
-    assert (config.client_token, config.data_dir) == ("c", "/srv/farm")

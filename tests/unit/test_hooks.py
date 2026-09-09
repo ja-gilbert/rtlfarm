@@ -40,17 +40,19 @@ def test_the_core_hook_set_is_the_six_of_the_spec() -> None:
     )
 
 
-def test_point_is_a_no_op_without_the_variable(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv(hooks.ENV_VAR, raising=False)
-    hooks.arm("after_claim_before_response", _boom)
-    hooks.point("after_claim_before_response")
-
-
-@pytest.mark.parametrize("value", ["0", "", "true", "yes", "2"])
-def test_only_the_value_1_enables_hooks(
-    monkeypatch: pytest.MonkeyPatch, value: str
+@pytest.mark.parametrize(
+    "value",
+    [None, "0", "", "true", "yes", "2"],
+    ids=["unset", "0", "empty", "true", "yes", "2"],
+)
+def test_hooks_are_inert_unless_the_variable_is_exactly_1(
+    monkeypatch: pytest.MonkeyPatch, value: str | None
 ) -> None:
-    monkeypatch.setenv(hooks.ENV_VAR, value)
+    """The hard rule: an armed hook does nothing unless RTLFARM_TEST_HOOKS=1."""
+    if value is None:
+        monkeypatch.delenv(hooks.ENV_VAR, raising=False)
+    else:
+        monkeypatch.setenv(hooks.ENV_VAR, value)
     hooks.arm("after_claim_before_response", _boom)
     hooks.point("after_claim_before_response")
 
