@@ -1,10 +1,8 @@
 """Migration 0001: the constraints that make the state machines fail loudly.
 
-The schema is the state machine. These tests drive the raw DDL with plain
-INSERT and UPDATE statements and assert that each CHECK constraint and
-partial unique index rejects exactly the rows it exists to reject, and
-accepts the legal neighbors, so a forgotten SET list or a widened state
-set fails at the first test rather than silently in production.
+These tests drive the raw DDL with plain INSERT and UPDATE, asserting that
+each CHECK constraint and partial unique index rejects exactly the rows it
+exists to reject and accepts the legal neighbors.
 """
 
 from __future__ import annotations

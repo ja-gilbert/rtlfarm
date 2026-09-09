@@ -315,8 +315,8 @@ def test_a_file_named_on_the_command_line_must_exist(
     assert not (tmp_path / "data").exists()
 
 
-# (verb, the one variable that is wrong, what the message must name). Every
-# row also has a plain file named "afile" in the working directory, so the two
+# (verb, the variable to set, its value, what the message must name). Every row
+# also gets a plain file named "afile" in the working directory, so the two
 # data_dir rows point the volume at a file.
 OPERATOR_MISTAKES = [
     pytest.param(

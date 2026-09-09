@@ -90,8 +90,7 @@ def apply_migrations(
 
     ``migrations`` defaults to the packaged directory; tests pass their own.
     Each migration runs in one ``BEGIN IMMEDIATE`` … ``COMMIT`` owned here;
-    a migration that ends that transaction itself is rejected. The recorded
-    ``applied_at_ms`` comes from the injected ``clock``.
+    a migration that ends that transaction itself is rejected.
     """
     pending = list(migrations) if migrations is not None else load_migrations()
     done = applied_versions(conn)

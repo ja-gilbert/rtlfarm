@@ -214,7 +214,7 @@ def test_whole_design_stage_downstream_of_a_fan_out_depends_on_all_of_it() -> No
 def test_a_stage_declared_before_its_dependency_still_expands() -> None:
     """Declaration order is not dependency order; expansion follows the graph.
 
-    Regression: a0602db (declaration order raised KeyError, a 500).
+    Regression: declaration order raised KeyError, a 500.
     """
     data = _pipeline()
     stages = data["stages"]

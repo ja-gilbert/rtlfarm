@@ -220,10 +220,7 @@ def test_read_connection_is_autocommit_with_the_busy_timeout(db: Database) -> No
 @pytest.mark.skipif(not Path("/proc/self/fd").is_dir(), reason="needs /proc")
 def test_a_failed_open_does_not_leave_the_connection_behind(tmp_path: Path) -> None:
     """The first pragma fails on a file that is not a database; the connection
-    it ran on must be closed before the error leaves ``open_connection``.
-
-    Regression: f3c6691 (RC-04 review).
-    """
+    it ran on must be closed before the error leaves ``open_connection``."""
     bad = tmp_path / "rtlfarm.db"
     bad.write_bytes(b"not a database" * 8)
     try:
@@ -249,10 +246,7 @@ def test_read_connection_opens_the_named_file_despite_uri_characters(
     tmp_path: Path,
 ) -> None:
     """``?``, ``#`` and ``%`` in a directory name are file-name characters; the
-    reader must open the file the writer migrated, not a URI-mangled path.
-
-    Regression: f3c6691 (RC-04 review).
-    """
+    reader must open the file the writer migrated, not a URI-mangled path."""
     odd = tmp_path / "vol?a#b%c"
     odd.mkdir()
     database = Database(odd / "rtlfarm.db", synchronous="OFF")

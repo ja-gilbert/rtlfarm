@@ -504,11 +504,8 @@ def test_validate_timing_accepts_exactly_the_spec_orderings(
 ) -> None:
     """Hypothesis over the constants: accepted iff every required ordering holds.
 
-    The oracle restates the documented orderings in the test's own words, so
-    it catches an implementation slip in either direction (rejecting a legal
-    profile or accepting an illegal one) but not a shared misreading of the
-    design; that is what the maintainer's line-by-line review of
-    validate_timing() is for.
+    The oracle restates the documented orderings, so it catches an
+    implementation slip either way but not a shared misreading of the design.
     """
     timing = TimingConfig(
         tick_s=tick_s,

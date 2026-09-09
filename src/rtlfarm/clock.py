@@ -42,12 +42,8 @@ class WallClock:
 class DrivenClock:
     """A clock that moves only when a test moves it.
 
-    Time moves through ``advance`` and nothing else, so "the lease expired" is
-    always a decision the test made. ``sleep`` therefore does not move the
-    clock: it yields to the event loop once and returns, which keeps a loop
-    that awaits it from expiring leases on its own. The fast tier never runs
-    the scheduler's loop anyway; it calls ``tick()`` directly.
-
+    ``sleep`` yields to the event loop once and returns without moving the
+    clock, so a loop that awaits it cannot expire leases on its own.
     ``advance`` accepts a negative step so a test can model a wall clock that
     went backwards (the scheduler skips lease expiry on a backward step).
     """

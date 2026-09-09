@@ -1,16 +1,12 @@
 """Named crash points for fault injection.
 
-Production code calls ``point("name")`` at the places where a crash would be
-interesting: after a claim is written but before the response is sent, and so
-on. Outside tests the call does nothing. A test harness sets
-``RTLFARM_TEST_HOOKS=1`` and arms a hook with an action (``raise`` in the fast
-tier, ``os._exit(1)`` in the process tier); every later ``point`` for that
-name runs the action until the harness disarms it.
+``point("name")`` does nothing unless ``RTLFARM_TEST_HOOKS=1`` and a test
+harness has armed an action for that name (``raise`` in the fast tier,
+``os._exit(1)`` in the process tier).
 
 The Core set is closed so a coverage test can assert that every member fires
-somewhere in the suite. The name is checked on every call, enabled or not, so
-a misspelled hook fails loudly at the first test that reaches it instead of
-silently never firing; that check is the only thing an inert ``point`` does.
+somewhere in the suite, and the name is checked on every call, enabled or
+not, so a misspelled hook fails loudly instead of silently never firing.
 """
 
 from __future__ import annotations

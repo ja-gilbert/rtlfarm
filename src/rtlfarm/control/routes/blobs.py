@@ -2,10 +2,9 @@
 
 ``POST /v1/blobs`` streams the body into the store under the digest the
 client claims in ``X-Content-Sha256``, capped by the kind in ``X-Blob-Kind``,
-then records the ``blobs`` row. The file is renamed into place before the
-row is written; the crash hook between the two is where the process-tier
-test kills the control plane, and the retry that follows must find the
-file and simply write the row.
+then records the ``blobs`` row. The file is renamed into place before the row
+is written, so a crash between the two leaves the bytes in place and the
+retry only has to write the row.
 
 ``GET /v1/blobs/{sha256}`` streams the bytes with ``ETag`` set to the digest
 and ``Cache-Control: private, immutable``: content-addressed bytes never

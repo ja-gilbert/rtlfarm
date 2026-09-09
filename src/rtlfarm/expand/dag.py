@@ -1,8 +1,7 @@
 """Static expansion: a manifest plus a selection becomes the job's task graph.
 
-Everything about a job is decided here, at submission: which tasks exist,
-what each one reads, what it depends on, and its budgets. Nothing inserts a
-task later, so reproducing a job means re-expanding the same manifest and
+Every task a job will ever have is created here, at submission; nothing
+inserts one later. Reproducing a job is re-expanding the same manifest and
 selection, and every cache key is a function of what this module produced.
 
 Three shapes of stage:

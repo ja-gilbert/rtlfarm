@@ -1,9 +1,8 @@
 """The ready-queue SELECT: its query plan and its ordering.
 
 The claim's inner SELECT must be served by ``tasks_ready_queue`` as a covering
-index with no temporary sort, on an empty database, on a populated one, and
-after ANALYZE has written statistics. The expected plan is committed as a
-fixture so a schema or query change that loses the plan fails by name.
+index with no temporary sort. The expected plan is committed as a fixture so a
+schema or query change that loses it fails by name.
 """
 
 from __future__ import annotations

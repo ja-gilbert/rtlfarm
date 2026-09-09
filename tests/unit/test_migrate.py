@@ -1,11 +1,9 @@
 """The migration runner: numbered SQL files, applied in order, each in one
 transaction owned by the runner.
 
-A migration file contains no BEGIN or COMMIT. The runner opens BEGIN IMMEDIATE,
-runs the file, records the version in schema_migrations and commits, so a
-failure partway leaves neither the file's schema changes nor its row. Versions
-are contiguous from 1, a second run is a no-op, and ANALYZE runs after any
-migration is applied.
+A migration file contains no BEGIN or COMMIT of its own: the runner opens
+BEGIN IMMEDIATE, runs the file, records the version in schema_migrations and
+commits, so a failure partway leaves neither the schema changes nor the row.
 """
 
 from __future__ import annotations

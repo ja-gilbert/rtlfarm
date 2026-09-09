@@ -1,22 +1,16 @@
 """Opening SQLite connections the way the control plane needs them.
 
 Every connection is opened in autocommit mode, so the ``sqlite3`` module never
-begins a transaction on its own. Transactions are controlled only by explicit
+begins a transaction on its own; ``Connection.commit()`` and ``rollback()``
+are no-ops and are never called. Transactions are controlled only by explicit
 SQL: a write path issues ``BEGIN IMMEDIATE`` and ends with ``COMMIT`` or
-``ROLLBACK``; ``Connection.commit()`` and ``Connection.rollback()`` are never
-called (they are no-ops in this mode). This is what makes "one transaction per
-migration" and "one transaction per scheduler step" true by construction.
+``ROLLBACK``, which is what makes "one transaction per migration" and "one
+transaction per scheduler step" true by construction.
 
-The pragmas set here are the operating parameters of the database file, not
-scheduler timing: write-ahead logging so readers never block the writer,
-foreign keys enforced, a busy timeout so a second process waits instead of
-failing at once, an explicit page cache, and the durability level chosen by
-the caller.
-
-``Database`` is the control plane's handle: one writer connection used only
-inside ``write()``, which serializes writers with an asyncio lock and owns the
-``BEGIN IMMEDIATE`` … ``COMMIT``; readers get their own read-only connections
-so they never observe an open write.
+The pragmas set here are operating parameters of the database file, not
+scheduler timing: WAL so readers never block the writer, foreign keys on, a
+busy timeout so a second process waits instead of failing at once, a page
+cache, and the caller's durability level.
 """
 
 from __future__ import annotations
@@ -111,8 +105,7 @@ def execute_returning(
     """Run a statement with ``RETURNING`` and drain it before anything else runs.
 
     SQLite forbids modifying the database while a ``RETURNING`` statement is
-    still being stepped, so the rows are fetched to exhaustion here and the
-    caller gets a plain list.
+    still being stepped, so the rows are fetched to exhaustion here.
     """
     rows: list[tuple[object, ...]] = conn.execute(sql, params).fetchall()
     return rows

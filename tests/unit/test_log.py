@@ -152,7 +152,7 @@ def test_default_stream_is_resolved_at_call_time(
 ) -> None:
     """A stdout swapped in after import (as pytest does) still receives events.
 
-    Regression: the stream was bound at import time until 0fd4037 (RC-04).
+    Regression: the stream was bound at import time.
     """
     replacement = io.StringIO()
     monkeypatch.setattr(sys, "stdout", replacement)

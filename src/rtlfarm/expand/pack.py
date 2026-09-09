@@ -5,18 +5,15 @@ with its role, position, digest and size, and the validated pipeline. It is
 canonical so that the same directory always packs to the same bytes and the
 same digest, whatever order the filesystem lists files in.
 
-Rules, each with a test: paths are relative and forward-slash; a glob may not
-be absolute or contain ``..``; a symlink anywhere on a file's path is
-rejected, as is a file that resolves outside the pack root; bytes are hashed
-as they are (a CRLF file is a different input); a file matched by two roles
-is an error naming both; ``.git``, ``__pycache__`` and the caller's own
-output are never packed; every file a target names must be packed under
-that role.
+Rules: paths are relative and forward-slash; a glob may not be absolute or
+contain ``..``; a symlink anywhere on a file's path is rejected, as is a file
+that resolves outside the pack root; bytes are hashed as they are (a CRLF
+file is a different input); a file matched by two roles is an error naming
+both; ``.git``, ``__pycache__`` and the caller's own output are never packed;
+every file a target names must be packed under that role.
 
 Ordinals fix compilation order within a role: glob declaration order first,
-then path order within a glob. A task's file list is built later by taking
-its stage's roles in ``consumes`` order and each role's files in ordinal
-order.
+then path order within a glob.
 """
 
 from __future__ import annotations

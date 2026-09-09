@@ -81,10 +81,8 @@ def register(verbs: Subparsers) -> None:
 def run_control(args: argparse.Namespace) -> int:
     """Load and check the configuration, bring the control plane up, serve.
 
-    Anything an operator can get wrong (the configuration, the timing
-    orderings, a non-loopback bind without auth, an unusable volume) is one
-    line on stderr and exit code 1. The loopback guard runs before anything
-    touches the disk.
+    Anything an operator can get wrong is one line on stderr and exit code 1.
+    The loopback guard runs before anything touches the disk.
     """
     log.configure_logging("control", level=logging.INFO)
     try:
