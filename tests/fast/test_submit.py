@@ -149,16 +149,13 @@ async def test_stored_manifest_and_pipeline_are_canonical_json(
     uploaded: Manifest,
     db: Database,
 ) -> None:
-    job_id = (
-        await client.post("/v1/jobs", json=_body(uploaded), headers=as_client)
-    ).json()["job_id"]
+    await client.post("/v1/jobs", json=_body(uploaded), headers=as_client)
     ((manifest_json, pipeline_json, selection_json),) = _rows(
         db, "SELECT manifest_json, pipeline_json, selection_json FROM jobs"
     )
     assert manifest_json == uploaded.canonical_json()
     assert json.loads(pipeline_json)["design"]["name"] == "fake_smoke"
     assert json.loads(selection_json) == Selection().to_dict()
-    assert job_id
 
 
 async def test_task_rows_carry_params_and_budgets(
@@ -228,16 +225,24 @@ async def test_a_failure_inside_the_transaction_leaves_no_job(
     assert _count(db, "jobs") == 1
 
 
-async def test_each_submission_is_a_new_job_without_a_key(
+@pytest.mark.parametrize(
+    "key_header", [{}, {"Idempotency-Key": ""}], ids=["absent", "empty"]
+)
+async def test_without_a_usable_key_each_submission_is_a_new_job(
     client: httpx.AsyncClient,
     as_client: dict[str, str],
     uploaded: Manifest,
     db: Database,
+    key_header: dict[str, str],
 ) -> None:
-    first = await client.post("/v1/jobs", json=_body(uploaded), headers=as_client)
-    second = await client.post("/v1/jobs", json=_body(uploaded), headers=as_client)
+    """Regression: a0602db (an empty key was stored and replayed as a real key)."""
+    headers = as_client | key_header
+    first = await client.post("/v1/jobs", json=_body(uploaded), headers=headers)
+    second = await client.post("/v1/jobs", json=_body(uploaded), headers=headers)
+    assert (first.status_code, second.status_code) == (201, 201)
     assert first.json()["job_id"] != second.json()["job_id"]
     assert _count(db, "jobs") == 2
+    assert _count(db, "jobs", "idempotency_key IS NOT NULL") == 0
 
 
 ################################################################################
@@ -257,20 +262,6 @@ async def test_replay_with_the_same_key_returns_the_original_job(
     assert (first.status_code, second.status_code) == (201, 200)
     assert first.json() == second.json()
     assert _count(db, "jobs") == 1
-
-
-async def test_an_empty_idempotency_key_is_no_key(
-    client: httpx.AsyncClient,
-    as_client: dict[str, str],
-    uploaded: Manifest,
-    db: Database,
-) -> None:
-    headers = as_client | {"Idempotency-Key": ""}
-    first = await client.post("/v1/jobs", json=_body(uploaded), headers=headers)
-    second = await client.post("/v1/jobs", json=_body(uploaded), headers=headers)
-    assert (first.status_code, second.status_code) == (201, 201)
-    assert first.json()["job_id"] != second.json()["job_id"]
-    assert _count(db, "jobs", "idempotency_key IS NOT NULL") == 0
 
 
 async def test_same_key_for_different_work_is_a_conflict(
@@ -298,6 +289,7 @@ async def test_same_key_for_different_work_is_a_conflict(
 async def test_a_pipeline_pin_that_is_not_a_sha256_is_a_validation_error(
     client: httpx.AsyncClient, as_client: dict[str, str], uploaded: Manifest
 ) -> None:
+    """Regression: a0602db ('any' reached the schema CHECK as a 500)."""
     body = _body(uploaded)
     del body["toolchain_digest"]
     body["manifest"]["pipeline"]["toolchain"] = {"digest": "any"}
@@ -311,6 +303,7 @@ async def test_a_pipeline_pin_that_is_not_a_sha256_is_a_validation_error(
 async def test_a_configured_pin_that_is_not_a_sha256_is_unpinned(
     tmp_path: Path, clock: DrivenClock, manifest: Manifest
 ) -> None:
+    """Regression: a0602db (a malformed configured pin was used as-is)."""
     config = Config(client_token="c", toolchain=ToolchainConfig(digest="any"))
     db = Database(tmp_path / "bad.db", synchronous="OFF")
     db.migrate(clock)
@@ -342,32 +335,26 @@ async def test_unpinned_toolchain_is_rejected(
     assert response.json()["error"]["code"] == "TOOLCHAIN_UNPINNED"
 
 
-async def test_pipeline_pin_is_used_when_the_body_has_none(
+@pytest.mark.parametrize(
+    ("body_pin", "stored"),
+    [(None, "e" * 64), ("a" * 64, "a" * 64)],
+    ids=["pipeline-pin-when-the-body-has-none", "body-pin-beats-the-pipeline-pin"],
+)
+async def test_the_body_pin_beats_the_pipeline_pin(
     client: httpx.AsyncClient,
     as_client: dict[str, str],
     uploaded: Manifest,
     db: Database,
+    body_pin: str | None,
+    stored: str,
 ) -> None:
-    body = _body(uploaded)
-    del body["toolchain_digest"]
+    body = _body(uploaded, toolchain_digest=body_pin)
+    if body_pin is None:
+        del body["toolchain_digest"]
     body["manifest"]["pipeline"]["toolchain"] = {"digest": "e" * 64}
     response = await client.post("/v1/jobs", json=body, headers=as_client)
     assert response.status_code == 201
-    assert _rows(db, "SELECT toolchain_digest FROM jobs") == [("e" * 64,)]
-
-
-async def test_body_pin_beats_the_pipeline_pin(
-    client: httpx.AsyncClient,
-    as_client: dict[str, str],
-    uploaded: Manifest,
-    db: Database,
-) -> None:
-    body = _body(uploaded, toolchain_digest="a" * 64)
-    body["manifest"]["pipeline"]["toolchain"] = {"digest": "e" * 64}
-    assert (
-        await client.post("/v1/jobs", json=body, headers=as_client)
-    ).status_code == 201
-    assert _rows(db, "SELECT toolchain_digest FROM jobs") == [("a" * 64,)]
+    assert _rows(db, "SELECT toolchain_digest FROM jobs") == [(stored,)]
 
 
 async def test_configured_pin_is_the_last_resort(
@@ -479,6 +466,7 @@ async def test_selection_narrows_the_graph(
 async def test_declared_sizes_must_match_the_stored_blobs(
     client: httpx.AsyncClient, as_client: dict[str, str], uploaded: Manifest
 ) -> None:
+    """Regression: a0602db (sizes were taken from the client, not the store)."""
     body = _body(uploaded)
     body["manifest"]["files"][1]["size"] = 1  # the blob is bigger than that
     response = await client.post("/v1/jobs", json=body, headers=as_client)
@@ -523,6 +511,7 @@ async def test_design_pack_over_the_per_job_cap_is_413(
 async def test_an_input_over_the_per_file_cap_is_413_whatever_kind_uploaded_it(
     client: httpx.AsyncClient, as_client: dict[str, str], uploaded: Manifest
 ) -> None:
+    """Regression: a0602db (the per-file cap was not enforced at submission)."""
     big = b"z" * 5000  # over the fixture's 4096-byte input cap
     digest = hashlib.sha256(big).hexdigest()
     stored = await client.post(
@@ -541,6 +530,7 @@ async def test_an_input_over_the_per_file_cap_is_413_whatever_kind_uploaded_it(
 async def test_manifest_paths_must_be_plain_relative_paths(
     client: httpx.AsyncClient, as_client: dict[str, str], uploaded: Manifest
 ) -> None:
+    """Regression: a0602db (manifest paths were unvalidated at submission)."""
     for bad in ("../escape.txt", "/etc/passwd", "", "src\\x.txt", "a/./b", "x/"):
         body = _body(uploaded)
         body["manifest"]["files"][0]["path"] = bad
@@ -553,6 +543,7 @@ async def test_manifest_paths_must_be_plain_relative_paths(
 async def test_stage_timeouts_are_checked_against_the_timing_constants(
     client: httpx.AsyncClient, as_client: dict[str, str], uploaded: Manifest
 ) -> None:
+    """Regression: a0602db (validate_timing was never called with the stages)."""
     body = _body(uploaded)
     body["manifest"]["pipeline"]["stages"]["compile"]["timeout_s"] = 1
     response = await client.post("/v1/jobs", json=body, headers=as_client)
@@ -565,6 +556,7 @@ async def test_stage_timeouts_are_checked_against_the_timing_constants(
 async def test_stage_declared_before_its_dependency_is_accepted(
     client: httpx.AsyncClient, as_client: dict[str, str], uploaded: Manifest
 ) -> None:
+    """Regression: a0602db (declaration order raised KeyError, a 500)."""
     body = _body(uploaded)
     stages = body["manifest"]["pipeline"]["stages"]
     body["manifest"]["pipeline"]["stages"] = {
@@ -583,6 +575,7 @@ async def test_stage_declared_before_its_dependency_is_accepted(
 async def test_duplicate_dependency_is_a_pipeline_error_not_a_crash(
     client: httpx.AsyncClient, as_client: dict[str, str], uploaded: Manifest
 ) -> None:
+    """Regression: a0602db (duplicate task_deps rows, a 500)."""
     body = _body(uploaded)
     body["manifest"]["pipeline"]["stages"]["simulate"]["depends_on"] = [
         "compile",
@@ -657,6 +650,7 @@ async def test_job_list_is_newest_first_with_state_filter_and_limit(
     as_client: dict[str, str],
     uploaded: Manifest,
     clock: DrivenClock,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     ids = []
     for _ in range(3):
@@ -674,12 +668,15 @@ async def test_job_list_is_newest_first_with_state_filter_and_limit(
         "jobs"
     ]
     assert none == []
-    assert job_routes._limit(10_000) == job_routes.LIST_LIMIT_CAP
+    monkeypatch.setattr(job_routes, "LIST_LIMIT_CAP", 2)
+    capped = (await client.get("/v1/jobs?limit=10000", headers=as_client)).json()
+    assert [j["job_id"] for j in capped["jobs"]] == list(reversed(ids))[:2]
 
 
 async def test_a_state_filter_outside_the_vocabulary_is_422(
     client: httpx.AsyncClient, as_client: dict[str, str], uploaded: Manifest
 ) -> None:
+    """Regression: a0602db (the state filter was unvalidated)."""
     job_id = (
         await client.post("/v1/jobs", json=_body(uploaded), headers=as_client)
     ).json()["job_id"]

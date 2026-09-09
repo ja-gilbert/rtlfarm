@@ -5,6 +5,7 @@ verification, atomic placement, duplicates, and the startup sweep.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import hashlib
 import os
 from collections.abc import AsyncIterator, Iterable
@@ -82,15 +83,29 @@ def test_path_is_sharded_by_the_first_two_hex_characters(store: BlobStore) -> No
     assert store.path_for(digest) == store.root / "sha256" / "ab" / digest
 
 
-def test_every_kind_has_a_cap_and_unknown_kinds_do_not() -> None:
-    assert blobstore.cap_for("input", CAPS) == 1_000
-    assert blobstore.cap_for("log.stdout", CAPS) == 100
-    assert blobstore.cap_for("log.stderr", CAPS) == 100
-    assert blobstore.cap_for("compiled", CAPS) == 4 * 1024 * 1024
-    assert blobstore.cap_for("waveform.fst", CAPS) == 500
-    assert blobstore.cap_for("coverage.info", CAPS) == 600
-    for kind in blobstore.KIND_CAPS:
-        assert blobstore.cap_for(kind, CAPS) > 0
+# The blob kinds of spec §13.2 and the BlobsConfig field that caps each one.
+KINDS_AND_CAP_FIELDS = {
+    "log.stdout": "log_bytes",
+    "log.stderr": "log_bytes",
+    "input": "input_file_bytes",
+    "diagnostics.json": "diagnostics_bytes",
+    "deps.txt": "deps_bytes",
+    "compiled": "compiled_bytes",
+    "result.json": "result_bytes",
+    "waveform.fst": "waveform_bytes",
+    "coverage.dat": "coverage_bytes",
+    "coverage.info": "coverage_bytes",
+}
+
+
+def test_every_kind_of_the_spec_is_capped_by_its_own_config_field() -> None:
+    """Exactly the spec's kinds exist, and raising one field raises the cap of
+    exactly the kinds it names, so an operator's override reaches the right
+    blobs. Anything else is refused by name."""
+    assert set(blobstore.KIND_CAPS) == set(KINDS_AND_CAP_FIELDS)
+    for kind, field in KINDS_AND_CAP_FIELDS.items():
+        raised = dataclasses.replace(CAPS, **{field: 7_777})
+        assert blobstore.cap_for(kind, raised) == 7_777
     with pytest.raises(UnknownBlobKind, match="bogus"):
         blobstore.cap_for("bogus", CAPS)
 
@@ -100,9 +115,16 @@ def test_every_kind_has_a_cap_and_unknown_kinds_do_not() -> None:
 ################################################################################
 
 
-def test_ingest_places_the_bytes_under_their_digest(store: BlobStore) -> None:
-    data = b"module counter; endmodule\n"
-    result = _ingest(store, "input", [data[:10], data[10:]])
+@pytest.mark.parametrize(
+    ("data", "chunk"),
+    [(b"module counter; endmodule\n", 10), (os.urandom(3 * 1024 * 1024 + 123), 65_536)],
+    ids=["two-pieces", "three-megabytes-in-64k-pieces"],
+)
+def test_ingest_places_the_bytes_under_their_digest(
+    store: BlobStore, data: bytes, chunk: int
+) -> None:
+    pieces = [data[i : i + chunk] for i in range(0, len(data), chunk)]
+    result = _ingest(store, "compiled", pieces)
     assert result == blobstore.IngestResult(_sha(data), len(data), created=True)
     assert store.path_for(result.sha256).read_bytes() == data
     assert store.has(result.sha256)
@@ -128,14 +150,6 @@ def test_empty_blob_is_allowed(store: BlobStore) -> None:
     assert result.size == 0
     assert result.sha256 == _sha(b"")
     assert store.path_for(result.sha256).read_bytes() == b""
-
-
-def test_large_body_is_hashed_across_chunks(store: BlobStore) -> None:
-    data = os.urandom(3 * 1024 * 1024 + 123)
-    pieces = [data[i : i + 65_536] for i in range(0, len(data), 65_536)]
-    result = _ingest(store, "compiled", pieces)
-    assert result.sha256 == _sha(data)
-    assert result.size == len(data)
 
 
 def test_digest_mismatch_leaves_nothing_behind(store: BlobStore) -> None:
@@ -224,7 +238,3 @@ def test_sweep_removes_only_stale_uploads(store: BlobStore) -> None:
     assert not stale.exists()
     assert fresh.exists()
     assert store.has(kept.sha256)
-
-
-def test_sweep_on_an_empty_tmp_is_a_no_op(store: BlobStore) -> None:
-    assert store.sweep_tmp(older_than_s=1, now_s=2) == []

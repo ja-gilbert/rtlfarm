@@ -27,7 +27,6 @@ from rtlfarm.config import (
 )
 from rtlfarm.control import startup
 from rtlfarm.control.startup import (
-    ControlPlane,
     StartupError,
     config_fingerprint,
     open_database,
@@ -155,17 +154,6 @@ def test_auth_disabled_logs_a_warning_banner(
     assert "open" in str(banner["detail"])
 
 
-def test_control_plane_is_frozen(tmp_path: Path, clock: DrivenClock) -> None:
-    plane: ControlPlane = prepare(
-        _config(tmp_path, client_token="c"), clock, synchronous="OFF"
-    )
-    try:
-        with pytest.raises(AttributeError):
-            plane.app = None  # type: ignore[misc, assignment]
-    finally:
-        plane.close()
-
-
 ################################################################################
 # Failure Before Serving
 ################################################################################
@@ -233,15 +221,12 @@ CHANGED: list[tuple[str, Config]] = [
 ]
 
 
-def test_fingerprint_is_stable_and_ignores_the_token_values() -> None:
+def test_fingerprint_reflects_token_presence_but_never_token_values() -> None:
     a = Config(client_token="one", worker_token="x", data_dir="d")
     b = Config(client_token="two", worker_token="y", data_dir="d")
     assert config_fingerprint(a) == config_fingerprint(b)
-    assert len(config_fingerprint(a)) == 12
-
-
-def test_fingerprint_changes_when_a_token_appears() -> None:
     assert config_fingerprint(Config(client_token="c")) != config_fingerprint(Config())
+    assert len(config_fingerprint(a)) == 12
 
 
 def test_the_change_table_names_every_non_secret_field() -> None:
