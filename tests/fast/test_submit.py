@@ -483,7 +483,10 @@ async def test_declared_sizes_must_match_the_stored_blobs(
 async def test_design_pack_over_the_per_job_cap_is_413(
     tmp_path: Path, clock: DrivenClock, manifest: Manifest
 ) -> None:
-    """The cap is judged on stored sizes, so it cannot be dodged by lying."""
+    """The cap is judged on stored sizes, so it cannot be dodged by lying.
+
+    Regression: a0602db (the cap was judged on the sizes the client declared).
+    """
     config = Config(
         client_token="c",
         blobs=BlobsConfig(input_job_bytes=100),
@@ -668,6 +671,7 @@ async def test_job_list_is_newest_first_with_state_filter_and_limit(
         "jobs"
     ]
     assert none == []
+    # The cap is a module constant, not configuration; lower it to observe it.
     monkeypatch.setattr(job_routes, "LIST_LIMIT_CAP", 2)
     capped = (await client.get("/v1/jobs?limit=10000", headers=as_client)).json()
     assert [j["job_id"] for j in capped["jobs"]] == list(reversed(ids))[:2]

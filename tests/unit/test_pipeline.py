@@ -299,6 +299,7 @@ def test_self_dependency_is_a_cycle() -> None:
 
 
 def test_targeted_stages_without_targets() -> None:
+    """Regression: a0602db (no targets was reported at /selection, not the stage)."""
     data = _mutate(["targets"], [])
     assert _pointers(data) == [
         "/stages/compile/per_target",
@@ -307,16 +308,19 @@ def test_targeted_stages_without_targets() -> None:
 
 
 def test_depends_on_listed_twice() -> None:
+    """Regression: a0602db (duplicate task_deps rows, a 500 at submission)."""
     data = _mutate(["stages", "simulate", "depends_on"], ["compile", "compile"])
     assert _pointers(data) == ["/stages/simulate/depends_on/1"]
 
 
 def test_empty_stages_are_rejected() -> None:
+    """Regression: a0602db (a pipeline with no stages was accepted)."""
     data = _mutate(["stages"], {})
     assert _pointers(data) == ["/stages"]
 
 
 def test_pinned_toolchain_digest_must_be_a_sha256() -> None:
+    """Regression: a0602db ('any' reached the schema CHECK as a 500)."""
     data = _mutate(["toolchain", "digest"], "any")
     assert _pointers(data) == ["/toolchain/digest"]
     assert (
@@ -326,6 +330,7 @@ def test_pinned_toolchain_digest_must_be_a_sha256() -> None:
 
 
 def test_seed_count_is_capped() -> None:
+    """Regression: a0602db (seed ranges were unbounded; memory was the limit)."""
     assert _pointers(
         _mutate(["targets", 0, "seeds"], {"n": MAX_SEEDS_PER_TARGET + 1, "base": 1})
     ) == ["/targets/0/seeds"]
