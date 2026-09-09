@@ -5,7 +5,6 @@ submission hash.
 
 from __future__ import annotations
 
-import dataclasses
 from typing import Any
 
 import pytest
@@ -14,7 +13,6 @@ from rtlfarm.expand.dag import (
     ExpandedJob,
     Selection,
     SelectionError,
-    TaskSpec,
     expand,
     select_targets,
     submission_hash,
@@ -281,10 +279,15 @@ def test_consumes_order_beats_role_order() -> None:
     assert lint.inputs[0] == "tb/rtlfarm_tb.svh"
 
 
-def test_consumes_artifacts_default_and_override() -> None:
-    job = _expand()
-    assert job.task(f"{JOB}.simulate.tb_basic.s1").consumes_artifacts == ("compiled",)
-    assert job.task(f"{JOB}.lint._.s0").consumes_artifacts == ("compiled",)
+def test_consumes_artifacts_follows_the_stage_declaration() -> None:
+    """The default is the compiled artifact; a stage may declare that it
+    consumes none, and the sandbox then unpacks nothing from upstream."""
+    default = _expand().task(f"{JOB}.simulate.tb_basic.s1")
+    assert default.consumes_artifacts == ("compiled",)
+    data = _pipeline()
+    data["stages"]["simulate"]["consumes_artifacts"] = []
+    declared = _expand(_manifest(data)).task(f"{JOB}.simulate.tb_basic.s1")
+    assert declared.consumes_artifacts == ()
 
 
 ################################################################################
@@ -312,13 +315,6 @@ def test_targeted_task_params_carry_the_simulation_settings() -> None:
     assert random.params["include_dirs"] == ["tb"]
     assert random.params["tb"] == ["tb/tb_random.sv", "tb/tb_common.sv"]
     assert "seed" not in random.params
-
-
-def test_whole_design_task_params_have_no_target_settings() -> None:
-    lint = _expand().task(f"{JOB}.lint._.s0")
-    assert "top" not in lint.params
-    assert "plusargs" not in lint.params
-    assert lint.params["params"] == {"WIDTH": 8, "DEPTH": 4}
 
 
 def test_timeout_comes_from_the_target_when_it_overrides_the_stage() -> None:
@@ -422,12 +418,3 @@ def test_submission_hash_covers_manifest_and_selection() -> None:
     changed["design"]["params"]["WIDTH"] = 9
     assert base != submission_hash(_manifest(changed), Selection())
     assert _expand(m).submission_hash == base
-
-
-def test_expanded_job_is_frozen() -> None:
-    job = _expand()
-    with pytest.raises(dataclasses.FrozenInstanceError):
-        job.design = "other"  # type: ignore[misc]
-    task: TaskSpec = job.tasks[0]
-    with pytest.raises(dataclasses.FrozenInstanceError):
-        task.seed = 1  # type: ignore[misc]

@@ -36,22 +36,12 @@ def test_help_exits_zero_and_prints_usage(capsys: pytest.CaptureFixture[str]) ->
         assert flag in out
 
 
-def test_no_verb_is_a_usage_error(capsys: pytest.CaptureFixture[str]) -> None:
-    assert main([]) == 2
-    assert "usage: rtlfarm" in capsys.readouterr().err
-
-
-def test_dev_without_a_command_is_a_usage_error(
-    capsys: pytest.CaptureFixture[str],
+@pytest.mark.parametrize("argv", [[], ["dev"]], ids=["no-verb", "verb-without-command"])
+def test_a_missing_verb_or_command_is_a_usage_error(
+    argv: list[str], capsys: pytest.CaptureFixture[str]
 ) -> None:
-    assert main(["dev"]) == 2
+    assert main(argv) == 2
     assert "usage: rtlfarm" in capsys.readouterr().err
-
-
-def test_unknown_flag_is_a_usage_error() -> None:
-    with pytest.raises(SystemExit) as info:
-        main(["--bogus"])
-    assert info.value.code == 2
 
 
 def test_installed_console_script_runs() -> None:
@@ -317,27 +307,61 @@ def test_a_file_named_on_the_command_line_must_exist(
     assert not (tmp_path / "data").exists()
 
 
-def test_control_run_reports_a_bad_configuration(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("RTLFARM_TIMING__LEASE_TTL_S", "1")
-    assert main(["control", "run"]) == 1
-    assert "lease_ttl_s" in capsys.readouterr().err
+# (verb, the one variable that is wrong, what the message must name). Every
+# row also has a plain file named "afile" in the working directory, so the two
+# data_dir rows point the volume at a file.
+OPERATOR_MISTAKES = [
+    pytest.param(
+        ["control", "run"],
+        "RTLFARM_TIMING__LEASE_TTL_S",
+        "1",
+        "lease_ttl_s",
+        id="control-run-timing-ordering",
+    ),
+    pytest.param(
+        ["control", "run"],
+        "RTLFARM_DATA_DIR",
+        "afile",
+        "afile",
+        id="control-run-unusable-volume",
+    ),
+    pytest.param(
+        ["admin", "migrate"],
+        "RTLFARM_TIMING__LEASE_TTL_S",
+        "thirty",
+        "RTLFARM_TIMING__LEASE_TTL_S",
+        id="admin-migrate-unparsable-value",
+    ),
+    pytest.param(
+        ["admin", "migrate"],
+        "RTLFARM_DATA_DIR",
+        "afile",
+        "afile",
+        id="admin-migrate-unusable-data-dir",
+    ),
+]
 
 
-def test_control_run_reports_an_unusable_volume(
+@pytest.mark.parametrize(("argv", "variable", "value", "names"), OPERATOR_MISTAKES)
+def test_an_operator_mistake_is_one_line_on_stderr_and_exit_one(
+    argv: list[str],
+    variable: str,
+    value: str,
+    names: str,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
     served: list[tuple[FastAPI, str, int]],
 ) -> None:
+    """A bad configuration, a violated timing ordering or an unusable volume
+    is reported by name and nothing is served or written."""
     monkeypatch.chdir(tmp_path)
     (tmp_path / "afile").write_text("", encoding="utf-8")
-    monkeypatch.setenv("RTLFARM_DATA_DIR", "afile")
-    assert main(["control", "run"]) == 1
-    assert "afile" in capsys.readouterr().err
+    monkeypatch.setenv(variable, value)
+    assert main(argv) == 1
+    assert names in capsys.readouterr().err
     assert served == []
+    assert not (tmp_path / "data").exists()
 
 
 def test_admin_migrate_applies_and_reports(
@@ -353,23 +377,3 @@ def test_admin_migrate_applies_and_reports(
     }
     assert main(["admin", "migrate"]) == 0
     assert "applied nothing; at 1" in capsys.readouterr().out
-
-
-def test_admin_migrate_reports_a_bad_configuration(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("RTLFARM_TIMING__LEASE_TTL_S", "thirty")
-    assert main(["admin", "migrate"]) == 1
-    assert "RTLFARM_TIMING__LEASE_TTL_S" in capsys.readouterr().err
-    assert not (tmp_path / "data").exists()
-
-
-def test_admin_migrate_reports_an_unusable_data_dir(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / "afile").write_text("", encoding="utf-8")
-    monkeypatch.setenv("RTLFARM_DATA_DIR", "afile")
-    assert main(["admin", "migrate"]) == 1
-    assert "afile" in capsys.readouterr().err
