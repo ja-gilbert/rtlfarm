@@ -61,18 +61,21 @@ def test_every_line_carries_the_fixed_fields(
 
 
 @pytest.mark.parametrize(
-    ("level", "emitted"),
-    [(logging.DEBUG, True), (logging.WARNING, False)],
-    ids=["debug-threshold-emits-info", "warning-threshold-drops-info"],
+    ("threshold", "emitted"),
+    [(logging.DEBUG, ["DEBUG", "INFO"]), (logging.WARNING, [])],
+    ids=["debug-threshold-emits-debug-and-info", "warning-threshold-drops-both"],
 )
 def test_the_configured_level_is_the_threshold(
-    stream: io.StringIO, level: int, emitted: bool
+    stream: io.StringIO, threshold: int, emitted: list[str]
 ) -> None:
     """The level given to configure_logging decides what is emitted, in both
     directions; the root logger's own default (WARNING) does not."""
-    log.configure_logging(service="control", stream=stream, level=level)
-    log.get_logger("rtlfarm.test").info("started")
-    assert (stream.getvalue() != "") is emitted
+    log.configure_logging(service="control", stream=stream, level=threshold)
+    logger = log.get_logger("rtlfarm.test")
+    logger.debug("noise")
+    logger.info("started")
+    levels = [json.loads(line)["level"] for line in stream.getvalue().splitlines()]
+    assert levels == emitted
 
 
 def test_warning_and_error_levels(logger: log.EventLogger, stream: io.StringIO) -> None:
