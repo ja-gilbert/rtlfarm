@@ -128,7 +128,7 @@ async def test_unknown_kind_is_422_with_a_pointer(
     assert response.status_code == 422
     error = response.json()["error"]
     assert error["code"] == "VALIDATION"
-    assert error["details"][0]["pointer"] == "/headers/x-blob-kind"
+    assert error["details"][0]["pointer"] == "/header/x-blob-kind"
 
 
 async def test_malformed_digest_is_422_with_a_pointer(
@@ -141,7 +141,7 @@ async def test_malformed_digest_is_422_with_a_pointer(
     )
     assert response.status_code == 422
     assert response.json()["error"]["details"][0]["pointer"] == (
-        "/headers/x-content-sha256"
+        "/header/x-content-sha256"
     )
 
 

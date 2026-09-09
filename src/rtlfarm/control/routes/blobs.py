@@ -61,14 +61,14 @@ async def upload(
             422,
             "VALIDATION",
             str(e),
-            [{"pointer": "/headers/x-blob-kind", "message": str(e)}],
+            [{"pointer": "/header/x-blob-kind", "message": str(e)}],
         ) from None
     except InvalidDigest as e:
         raise ApiError(
             422,
             "VALIDATION",
             str(e),
-            [{"pointer": "/headers/x-content-sha256", "message": str(e)}],
+            [{"pointer": "/header/x-content-sha256", "message": str(e)}],
         ) from None
     except BlobTooLarge as e:
         raise ApiError(

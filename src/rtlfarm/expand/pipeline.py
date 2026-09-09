@@ -16,13 +16,8 @@ from pathlib import Path
 import yaml
 from pydantic import ValidationError
 
-from rtlfarm.models import (
-    ARTIFACT_KINDS,
-    RESERVED_PLUSARGS,
-    STAGE_KINDS,
-    Pipeline,
-    Stage,
-)
+from rtlfarm.ids import STAGE_KINDS
+from rtlfarm.models import ARTIFACT_KINDS, RESERVED_PLUSARGS, Pipeline, Stage
 
 PIPELINE_FILENAME = "rtlfarm.yaml"
 
