@@ -116,7 +116,7 @@ def test_migrations_apply_in_version_order(tmp_path: Path) -> None:
     applied = migrate.apply_migrations(conn, clock, migrate.load_migrations(src))
     assert applied == [1, 2, 3]
     assert _tables(conn) == {"schema_migrations", "a", "b", "c"}
-    assert [v for v, _ in _recorded(conn)] == [1, 2, 3]
+    assert _recorded(conn) == [(1, 100), (2, 100), (3, 100)]  # the injected clock
     conn.close()
 
 
@@ -159,17 +159,6 @@ def test_migration_that_commits_on_its_own_is_rejected(tmp_path: Path) -> None:
     conn.close()
 
 
-def test_applied_at_ms_comes_from_the_injected_clock(tmp_path: Path) -> None:
-    src = tmp_path / "migrations"
-    _write(src, "0001.sql", SCHEMA_MIGRATIONS)
-    _write(src, "0002.sql", "CREATE TABLE a (x INTEGER);")
-    conn = _open(tmp_path)
-    clock = DrivenClock(start_ms=1_000)
-    migrate.apply_migrations(conn, clock, migrate.load_migrations(src))
-    assert _recorded(conn) == [(1, 1_000), (2, 1_000)]
-    conn.close()
-
-
 ################################################################################
 # The Loader
 ################################################################################
@@ -195,17 +184,15 @@ def test_loader_ignores_files_that_are_not_migrations(tmp_path: Path) -> None:
     assert [m.version for m in migrate.load_migrations(src)] == [1]
 
 
-def test_loader_rejects_a_gap(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    "names", [["0001.sql", "0003.sql"], ["0002.sql"]], ids=["gap", "starts-at-two"]
+)
+def test_loader_rejects_versions_that_are_not_contiguous_from_one(
+    tmp_path: Path, names: list[str]
+) -> None:
     src = tmp_path / "migrations"
-    _write(src, "0001.sql", "-- one")
-    _write(src, "0003.sql", "-- three")
-    with pytest.raises(migrate.MigrationError, match="contiguous"):
-        migrate.load_migrations(src)
-
-
-def test_loader_rejects_a_directory_that_does_not_start_at_one(tmp_path: Path) -> None:
-    src = tmp_path / "migrations"
-    _write(src, "0002.sql", "-- two")
+    for name in names:
+        _write(src, name, "-- sql")
     with pytest.raises(migrate.MigrationError, match="contiguous"):
         migrate.load_migrations(src)
 

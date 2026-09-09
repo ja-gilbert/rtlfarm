@@ -40,13 +40,14 @@ def _run(db: Database, *statements: tuple[str, tuple[object, ...]]) -> None:
     asyncio.run(go())
 
 
-def _job(job_id: str = "job-1") -> tuple[str, tuple[object, ...]]:
+def _job(job_id: str = "job-1", n_tasks: int = 1) -> tuple[str, tuple[object, ...]]:
+    """A RUNNING job; ``n_tasks`` must equal the tasks a test seeds under it."""
     return (
         "INSERT INTO jobs (job_id, design_name, submission_hash, manifest_json, "
         "pipeline_json, selection_json, toolchain_digest, priority, state, n_tasks, "
         "created_at_ms) VALUES (?, 'counter', 'h', '{}', '{}', '{}', 'sha256:x', 5, "
-        "'RUNNING', 1, 1000)",
-        (job_id,),
+        "'RUNNING', ?, 1000)",
+        (job_id, n_tasks),
     )
 
 
@@ -121,7 +122,7 @@ def _seed_consistent(db: Database) -> None:
     """A job with a finished task, a leased task and a pending dependent."""
     _run(
         db,
-        _job(),
+        _job(n_tasks=3),
         _task("t-done", "SUCCEEDED", committed_attempt_id="a-1", finished_at_ms=3000),
         _attempt("a-1", "t-done", "COMMITTED"),
         _event("t-done", 1, "READY", None),
@@ -193,28 +194,26 @@ def test_two_committed_attempts_are_reported(db: Database) -> None:
 ################################################################################
 
 
-def test_leased_task_whose_lease_names_no_active_attempt(db: Database) -> None:
+@pytest.mark.parametrize(
+    "attempt_rows",
+    [[_attempt("a-1", "t", "EXPIRED")], []],
+    ids=["names-an-expired-attempt", "names-no-row-at-all"],
+)
+def test_leased_task_without_a_matching_active_attempt(
+    db: Database, attempt_rows: list[tuple[str, tuple[object, ...]]]
+) -> None:
     _run(
         db,
         _job(),
         _task("t", "LEASED", lease_attempt_id="a-1"),
-        _attempt("a-1", "t", "EXPIRED"),
-        _event("t", 1, "LEASED"),
-    )
-    assert _numbers(db) == [2]
-
-
-def test_leased_task_whose_lease_names_a_missing_attempt(db: Database) -> None:
-    _run(
-        db,
-        _job(),
-        _task("t", "LEASED", lease_attempt_id="ghost"),
+        *attempt_rows,
         _event("t", 1, "LEASED"),
     )
     assert _numbers(db) == [2]
 
 
 def test_leased_task_with_two_active_attempts(db: Database) -> None:
+    """Exactly one ACTIVE attempt: the extra one is reported by name."""
     _run(
         db,
         _job(),
@@ -223,7 +222,9 @@ def test_leased_task_with_two_active_attempts(db: Database) -> None:
         _attempt("a-2", "t", "ACTIVE", 2),
         _event("t", 1, "RUNNING"),
     )
-    assert _numbers(db) == [2, 2]
+    violations = _check(db)
+    assert {v.invariant for v in violations} == {2}
+    assert any("a-2" in v.message for v in violations)
 
 
 def test_active_attempt_on_a_task_that_is_not_leased(db: Database) -> None:
@@ -261,19 +262,11 @@ def test_terminal_task_with_a_leftover_column(db: Database, column: str) -> None
 ################################################################################
 
 
-def test_event_sequence_gap_is_reported(db: Database) -> None:
-    _run(
-        db,
-        _job(),
-        _task("t", "READY"),
-        _event("t", 1, "PENDING"),
-        _event("t", 3, "READY", "PENDING"),
-    )
-    assert _numbers(db) == [8]
-
-
-def test_event_sequence_not_starting_at_one_is_reported(db: Database) -> None:
-    _run(db, _job(), _task("t", "READY"), _event("t", 2, "READY"))
+@pytest.mark.parametrize("seqs", [[1, 3], [2]], ids=["gap", "starts-at-two"])
+def test_a_non_contiguous_event_sequence_is_reported(
+    db: Database, seqs: list[int]
+) -> None:
+    _run(db, _job(), _task("t", "READY"), *[_event("t", s, "READY") for s in seqs])
     assert _numbers(db) == [8]
 
 
@@ -297,7 +290,7 @@ def test_last_event_disagreeing_with_task_state_is_reported(db: Database) -> Non
 def test_dependency_cycle_is_reported(db: Database) -> None:
     _run(
         db,
-        _job(),
+        _job(n_tasks=3),
         _task("a", "PENDING", ready_at_ms=None),
         _task("b", "PENDING", ready_at_ms=None),
         _task("c", "PENDING", ready_at_ms=None),
@@ -314,7 +307,7 @@ def test_dependency_cycle_is_reported(db: Database) -> None:
 def test_diamond_dependencies_are_not_a_cycle(db: Database) -> None:
     _run(
         db,
-        _job(),
+        _job(n_tasks=4),
         _task("a", "PENDING", ready_at_ms=None),
         _task("b", "PENDING", ready_at_ms=None),
         _task("c", "PENDING", ready_at_ms=None),

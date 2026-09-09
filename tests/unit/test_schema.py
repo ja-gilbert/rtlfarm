@@ -130,12 +130,13 @@ def _task_state(conn: sqlite3.Connection, task_id: str = "task-1") -> str:
 ################################################################################
 
 
-def test_leased_task_without_lease_attempt_id_is_rejected(
-    db: sqlite3.Connection,
+@pytest.mark.parametrize("state", ["LEASED", "RUNNING"])
+def test_a_leased_state_without_a_lease_attempt_id_is_rejected(
+    db: sqlite3.Connection, state: str
 ) -> None:
     _insert_job(db)
     with pytest.raises(sqlite3.IntegrityError, match="CHECK constraint failed"):
-        _insert_task(db, state="LEASED", lease_attempt_id=None)
+        _insert_task(db, state=state, lease_attempt_id=None)
 
 
 def test_leased_task_with_lease_attempt_id_is_accepted(
@@ -146,38 +147,23 @@ def test_leased_task_with_lease_attempt_id_is_accepted(
     assert _task_state(db) == "LEASED"
 
 
-def test_running_task_without_lease_attempt_id_is_rejected(
-    db: sqlite3.Connection,
-) -> None:
-    _insert_job(db)
-    with pytest.raises(sqlite3.IntegrityError, match="CHECK constraint failed"):
-        _insert_task(db, state="RUNNING", lease_attempt_id=None)
-
-
+@pytest.mark.parametrize(
+    "transition",
+    [
+        pytest.param("state = 'READY', requeued_at_ms = 6000", id="requeue"),
+        pytest.param("state = 'SUCCEEDED', finished_at_ms = 6000", id="commit"),
+    ],
+)
 def test_leaving_leased_without_clearing_the_lease_is_rejected(
-    db: sqlite3.Connection,
+    db: sqlite3.Connection, transition: str
 ) -> None:
-    """The forgotten SET list: requeue that leaves lease_attempt_id behind."""
+    """The forgotten SET list: whatever the destination, a transition out of
+    LEASED that leaves lease_attempt_id behind fails the CHECK."""
     _insert_job(db)
     _insert_task(db)
     _lease(db)
     with pytest.raises(sqlite3.IntegrityError, match="CHECK constraint failed"):
-        db.execute(
-            "UPDATE tasks SET state = 'READY', requeued_at_ms = 6000 "
-            "WHERE task_id = 'task-1'"
-        )
-    assert _task_state(db) == "LEASED"
-
-
-def test_terminal_state_with_leftover_lease_is_rejected(db: sqlite3.Connection) -> None:
-    _insert_job(db)
-    _insert_task(db)
-    _lease(db)
-    with pytest.raises(sqlite3.IntegrityError, match="CHECK constraint failed"):
-        db.execute(
-            "UPDATE tasks SET state = 'SUCCEEDED', finished_at_ms = 6000 "
-            "WHERE task_id = 'task-1'"
-        )
+        db.execute(f"UPDATE tasks SET {transition} WHERE task_id = 'task-1'")
     assert _task_state(db) == "LEASED"
 
 
