@@ -25,6 +25,7 @@ dev = [
     "types-pyyaml>=6.0.12.20260906",
     "httpx>=0.28.1",
     "pytest-asyncio>=1.4.0",
+    "pytest-cov>=7.1.0",
 ]
 
 [build-system]
@@ -52,3 +53,12 @@ addopts = "-ra"
 filterwarnings = ["error"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
+
+[tool.coverage.run]
+source = ["rtlfarm"]
+branch = true
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
+skip_covered = true
