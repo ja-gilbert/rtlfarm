@@ -33,7 +33,9 @@ CACHE_SIZE = -16_000
 
 #: How long a connection waits for a lock held by another process before
 #: raising ``sqlite3.OperationalError``. A SQLite driver parameter, not a
-#: scheduler timing constant.
+#: scheduler timing constant. It equals ``sqlite3.connect``'s own default;
+#: the pragma is issued anyway so the value lives with the other pragmas
+#: instead of in a driver default nobody reads.
 BUSY_TIMEOUT_MS = 5_000
 
 #: ``NORMAL`` for a real database, ``OFF`` for a throwaway test database,
@@ -47,15 +49,14 @@ class SqliteVersionError(RuntimeError):
     """The linked SQLite library is older than ``MIN_SQLITE_VERSION``."""
 
 
-def check_sqlite_version() -> tuple[int, int, int]:
-    """Return the linked SQLite version, or raise if it is below the floor."""
+def check_sqlite_version() -> None:
+    """Raise unless the linked SQLite meets the floor."""
     version = sqlite3.sqlite_version_info
     if version < MIN_SQLITE_VERSION:
         floor = ".".join(str(part) for part in MIN_SQLITE_VERSION)
         raise SqliteVersionError(
             f"SQLite {sqlite3.sqlite_version} is too old; {floor} or newer is required"
         )
-    return version
 
 
 def open_connection(
