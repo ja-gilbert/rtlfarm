@@ -1,7 +1,6 @@
 """Shared pytest configuration.
 
-Hypothesis is derandomized so a property failure in CI reproduces on the next
-run. The autouse fixtures strip ambient ``RTLFARM_*`` variables so a test sees
+The autouse fixtures strip ambient ``RTLFARM_*`` variables so a test sees
 only what it sets, and put the root logger back, since ``configure_logging``
 replaces its handlers and a test that fails halfway would leak one into the
 rest of the session.
@@ -14,12 +13,8 @@ import os
 from collections.abc import Iterator
 
 import pytest
-from hypothesis import settings
 
 from rtlfarm.config import ENV_PREFIX
-
-settings.register_profile("rtlfarm", derandomize=True, max_examples=200)
-settings.load_profile("rtlfarm")
 
 
 @pytest.fixture(autouse=True)

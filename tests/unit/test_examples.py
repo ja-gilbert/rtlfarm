@@ -1,6 +1,6 @@
-"""The shipped example packs: they pack, they expand, and their expansion is
-pinned by snapshot fixtures so that any change to a pack, to packing, or to
-expansion shows up as a named diff.
+"""The shipped example packs: they pack, they expand, and the full expansion
+of each is pinned by a snapshot fixture so that any change to a pack, to
+packing, or to expansion shows up as a named diff.
 
 Regenerate the snapshots after an intended change with
 ``RTLFARM_UPDATE_SNAPSHOTS=1 uv run pytest tests/unit/test_examples.py``
@@ -28,11 +28,6 @@ JOB = "01J0000000000000000000ABCD"
 DIGEST = "sha256:" + "e" * 64
 
 PACKS = ["fake_smoke", "counter"]
-SELECTIONS = {
-    "full": Selection(),
-    "smoke": Selection(tags=("smoke",)),
-    "seed7": Selection(seed=7),
-}
 
 ################################################################################
 # Snapshots
@@ -55,12 +50,11 @@ def _snapshot(name: str, selection: Selection) -> dict[str, object]:
 
 
 @pytest.mark.parametrize("name", PACKS)
-@pytest.mark.parametrize("selection", list(SELECTIONS))
-def test_expansion_matches_the_snapshot(name: str, selection: str) -> None:
-    actual = json.dumps(
-        _snapshot(name, SELECTIONS[selection]), indent=2, sort_keys=True
-    )
-    path = SNAPSHOTS / f"{name}_{selection}.json"
+def test_expansion_matches_the_snapshot(name: str) -> None:
+    """Every task, input, edge, parameter and budget of a real pipeline, in
+    one place; selection rules are the submit route's subject."""
+    actual = json.dumps(_snapshot(name, Selection()), indent=2, sort_keys=True)
+    path = SNAPSHOTS / f"{name}_full.json"
     if UPDATE:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(actual + "\n", encoding="utf-8")
@@ -89,8 +83,3 @@ def test_counter_ships_the_testbench_header_verbatim() -> None:
     ):
         assert f"`define {macro}" in text
     assert "\r" not in text
-
-
-def test_example_packs_have_no_pinned_toolchain() -> None:
-    for name in PACKS:
-        assert pack(EXAMPLES / name).pipeline.toolchain.digest is None

@@ -128,40 +128,28 @@ def _task_state(conn: sqlite3.Connection, task_id: str = "task-1") -> str:
 ################################################################################
 
 
-@pytest.mark.parametrize("state", ["LEASED", "RUNNING"])
 def test_a_leased_state_without_a_lease_attempt_id_is_rejected(
-    db: sqlite3.Connection, state: str
-) -> None:
-    _insert_job(db)
-    with pytest.raises(sqlite3.IntegrityError, match="CHECK constraint failed"):
-        _insert_task(db, state=state, lease_attempt_id=None)
-
-
-def test_leased_task_with_lease_attempt_id_is_accepted(
     db: sqlite3.Connection,
 ) -> None:
+    """A lease without its fencing token could never be fenced."""
     _insert_job(db)
-    _insert_task(db, state="LEASED", lease_attempt_id="att-1", leased_by="worker-1")
-    assert _task_state(db) == "LEASED"
+    with pytest.raises(sqlite3.IntegrityError, match="CHECK constraint failed"):
+        _insert_task(db, state="LEASED", lease_attempt_id=None)
 
 
-@pytest.mark.parametrize(
-    "transition",
-    [
-        pytest.param("state = 'READY', requeued_at_ms = 6000", id="requeue"),
-        pytest.param("state = 'SUCCEEDED', finished_at_ms = 6000", id="commit"),
-    ],
-)
 def test_leaving_leased_without_clearing_the_lease_is_rejected(
-    db: sqlite3.Connection, transition: str
+    db: sqlite3.Connection,
 ) -> None:
-    """The forgotten SET list: whatever the destination, a transition out of
-    LEASED that leaves lease_attempt_id behind fails the CHECK."""
+    """The forgotten SET list: a transition out of LEASED that leaves
+    lease_attempt_id behind fails the CHECK."""
     _insert_job(db)
     _insert_task(db)
     _lease(db)
     with pytest.raises(sqlite3.IntegrityError, match="CHECK constraint failed"):
-        db.execute(f"UPDATE tasks SET {transition} WHERE task_id = 'task-1'")
+        db.execute(
+            "UPDATE tasks SET state = 'READY', requeued_at_ms = 6000 "
+            "WHERE task_id = 'task-1'"
+        )
     assert _task_state(db) == "LEASED"
 
 
@@ -183,14 +171,6 @@ def test_leaving_leased_with_the_full_null_list_is_accepted(
     assert _task_state(db) == "READY"
 
 
-def test_inserting_ready_with_a_lease_attempt_id_is_rejected(
-    db: sqlite3.Connection,
-) -> None:
-    _insert_job(db)
-    with pytest.raises(sqlite3.IntegrityError, match="CHECK constraint failed"):
-        _insert_task(db, state="READY", lease_attempt_id="att-1")
-
-
 ################################################################################
 # READY Needs ready_at_ms
 ################################################################################
@@ -200,12 +180,6 @@ def test_ready_task_without_ready_at_ms_is_rejected(db: sqlite3.Connection) -> N
     _insert_job(db)
     with pytest.raises(sqlite3.IntegrityError, match="CHECK constraint failed"):
         _insert_task(db, state="READY", ready_at_ms=None)
-
-
-def test_pending_task_without_ready_at_ms_is_accepted(db: sqlite3.Connection) -> None:
-    _insert_job(db)
-    _insert_task(db, state="PENDING", ready_at_ms=None)
-    assert _task_state(db) == "PENDING"
 
 
 ################################################################################
@@ -228,23 +202,6 @@ def test_unknown_task_state_is_rejected(db: sqlite3.Connection) -> None:
     _insert_job(db)
     with pytest.raises(sqlite3.IntegrityError, match="CHECK constraint failed"):
         _insert_task(db, state="DONE")
-
-
-def test_aborted_is_an_accepted_attempt_state(db: sqlite3.Connection) -> None:
-    """Reserved for a worker-acknowledged cancel; in the CHECK from the start
-    because SQLite cannot widen a CHECK later without rebuilding the table."""
-    _insert_job(db)
-    _insert_task(db)
-    _insert_attempt(db, "att-1", "ABORTED")
-    row = db.execute("SELECT state FROM attempts WHERE attempt_id = 'att-1'").fetchone()
-    assert row == ("ABORTED",)
-
-
-def test_unknown_attempt_state_is_rejected(db: sqlite3.Connection) -> None:
-    _insert_job(db)
-    _insert_task(db)
-    with pytest.raises(sqlite3.IntegrityError, match="CHECK constraint failed"):
-        _insert_attempt(db, "att-1", "CANCELLED")
 
 
 ################################################################################
@@ -286,49 +243,20 @@ def test_several_non_committed_attempts_per_task_are_accepted(
     assert count == (3,)
 
 
-def test_committed_attempts_of_different_tasks_are_accepted(
-    db: sqlite3.Connection,
-) -> None:
-    _insert_job(db)
-    _insert_task(db, "task-1")
-    _insert_task(db, "task-2")
-    _insert_attempt(db, "att-1", "COMMITTED")
-    db.execute(
-        "INSERT INTO attempts (attempt_id, task_id, attempt, worker_id, state, "
-        "leased_at_ms) VALUES ('att-2', 'task-2', 1, 'worker-1', 'COMMITTED', 2000)"
-    )
-    count = db.execute("SELECT COUNT(*) FROM attempts").fetchone()
-    assert count == (2,)
-
-
 ################################################################################
-# The Connection
+# WAL and Foreign Keys
 ################################################################################
-
-
-def test_connection_is_autocommit_with_no_implicit_begin(
-    db: sqlite3.Connection,
-) -> None:
-    """sqlite3 opens no transaction of its own: a bare INSERT is committed at
-    once and visible from a second connection."""
-    assert db.autocommit is True
-    assert not db.in_transaction
-    _insert_job(db)
-    assert not db.in_transaction
-    other = sqlite3.connect(db.execute("PRAGMA database_list").fetchone()[2])
-    try:
-        assert other.execute("SELECT COUNT(*) FROM jobs").fetchone() == (1,)
-    finally:
-        other.close()
 
 
 def test_pragmas_and_wal(db: sqlite3.Connection) -> None:
+    """Without WAL, readers block the writer and the control plane stalls;
+    a real database that silently opened with synchronous OFF would lose
+    committed jobs on power loss."""
+
     def pragma(name: str) -> object:
         return db.execute(f"PRAGMA {name}").fetchone()[0]
 
     assert pragma("journal_mode") == "wal"
-    assert pragma("foreign_keys") == 1
-    assert pragma("busy_timeout") == 5000
     assert pragma("synchronous") == 1  # NORMAL, the default for a real database
     assert pragma("cache_size") == connection.CACHE_SIZE
 

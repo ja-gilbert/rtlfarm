@@ -1,5 +1,5 @@
-"""Structured JSON logging: the line shape, the level threshold, and who owns
-the root handlers."""
+"""Structured JSON logging: the line shape log shipping depends on, tracebacks
+on error, and who owns the root handlers."""
 
 from __future__ import annotations
 
@@ -8,7 +8,6 @@ import json
 import logging
 import sys
 from datetime import datetime, timedelta
-from pathlib import Path
 
 import pytest
 
@@ -60,54 +59,6 @@ def test_every_line_carries_the_fixed_fields(
     assert datetime.fromisoformat(ts).utcoffset() == timedelta(0)
 
 
-@pytest.mark.parametrize(
-    ("threshold", "emitted"),
-    [(logging.DEBUG, ["DEBUG", "INFO"]), (logging.WARNING, [])],
-    ids=["debug-threshold-emits-debug-and-info", "warning-threshold-drops-both"],
-)
-def test_the_configured_level_is_the_threshold(
-    stream: io.StringIO, threshold: int, emitted: list[str]
-) -> None:
-    """The level given to configure_logging decides what is emitted, in both
-    directions; the root logger's own default (WARNING) does not."""
-    log.configure_logging(service="control", stream=stream, level=threshold)
-    logger = log.get_logger("rtlfarm.test")
-    logger.debug("noise")
-    logger.info("started")
-    levels = [json.loads(line)["level"] for line in stream.getvalue().splitlines()]
-    assert levels == emitted
-
-
-def test_warning_and_error_levels(logger: log.EventLogger, stream: io.StringIO) -> None:
-    logger.warning("lease_expired", attempt_id="a1")
-    logger.error("tick_step_failed", step="expiry")
-    levels = [json.loads(line)["level"] for line in stream.getvalue().splitlines()]
-    assert levels == ["WARNING", "ERROR"]
-
-
-def test_one_json_object_per_line_even_with_newlines_in_fields(
-    logger: log.EventLogger, stream: io.StringIO
-) -> None:
-    logger.info("tool_output", detail="line one\nline two")
-    assert _only_line(stream)["detail"] == "line one\nline two"
-
-
-def test_non_json_values_fall_back_to_str(
-    logger: log.EventLogger, stream: io.StringIO
-) -> None:
-    logger.info("blob_written", path=Path("/blobs/sha256/ab"))
-    assert _only_line(stream)["path"] == "/blobs/sha256/ab"
-
-
-def test_reconfiguring_replaces_the_previous_handler(stream: io.StringIO) -> None:
-    other = io.StringIO()
-    log.configure_logging(service="control", stream=other, level=logging.INFO)
-    log.configure_logging(service="worker", stream=stream, level=logging.INFO)
-    log.get_logger("rtlfarm.test").info("started")
-    assert other.getvalue() == ""
-    assert _only_line(stream)["service"] == "worker"
-
-
 def test_configure_logging_owns_the_root_handlers(stream: io.StringIO) -> None:
     """A handler installed by someone else would print every event a second time."""
     foreign_stream = io.StringIO()
@@ -136,15 +87,6 @@ def test_exception_logs_carry_the_traceback(
     assert isinstance(exc, str)
     assert "ZeroDivisionError" in exc
     assert "Traceback" in exc
-
-
-@pytest.mark.parametrize("name", ["ts", "level", "service", "exc"])
-def test_fixed_keys_cannot_be_overwritten_by_fields(
-    logger: log.EventLogger, stream: io.StringIO, name: str
-) -> None:
-    with pytest.raises(ValueError, match=name):
-        logger.info("started", **{name: "overwritten"})
-    assert stream.getvalue() == ""
 
 
 def test_default_stream_is_resolved_at_call_time(

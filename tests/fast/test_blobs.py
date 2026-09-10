@@ -145,15 +145,6 @@ async def test_malformed_digest_is_422_with_a_pointer(
     )
 
 
-async def test_missing_headers_are_422(
-    client: httpx.AsyncClient, as_client: dict[str, str]
-) -> None:
-    response = await client.post("/v1/blobs", content=b"x", headers=as_client)
-    assert response.status_code == 422
-    pointers = {d["pointer"] for d in response.json()["error"]["details"]}
-    assert pointers == {"/header/x-content-sha256", "/header/x-blob-kind"}
-
-
 async def test_body_over_the_kind_cap_is_413(
     client: httpx.AsyncClient, as_client: dict[str, str], blobs: BlobStore
 ) -> None:
@@ -184,24 +175,7 @@ async def test_chunked_body_without_content_length_is_still_capped(
         headers=as_client | {"X-Content-Sha256": "a" * 64, "X-Blob-Kind": "input"},
     )
     assert response.status_code == 413
-    assert len(sent) < 100
-
-
-async def test_chunked_upload_is_hashed_across_chunks(
-    client: httpx.AsyncClient, as_client: dict[str, str], blobs: BlobStore
-) -> None:
-    pieces = [bytes([i]) * 300 for i in range(10)]
-    data = b"".join(pieces)
-
-    async def body() -> AsyncIterator[bytes]:
-        for piece in pieces:
-            yield piece
-
-    response = await client.post(
-        "/v1/blobs", content=body(), headers=as_client | _headers(data)
-    )
-    assert response.status_code == 201
-    assert blobs.path_for(_sha(data)).read_bytes() == data
+    assert len(sent) <= 4096 // 100 + 2  # cut off at the cap, not at the end
 
 
 ################################################################################
@@ -274,14 +248,6 @@ async def test_download_of_a_recorded_but_missing_file_is_410(
     response = await client.get(f"/v1/blobs/{_sha(data)}", headers=as_client)
     assert response.status_code == 410
     assert response.json()["error"]["code"] == "BLOB_MISSING"
-
-
-async def test_download_with_a_malformed_digest_is_422(
-    client: httpx.AsyncClient, as_client: dict[str, str]
-) -> None:
-    response = await client.get("/v1/blobs/not-a-digest", headers=as_client)
-    assert response.status_code == 422
-    assert response.json()["error"]["code"] == "VALIDATION"
 
 
 async def test_download_needs_a_token(

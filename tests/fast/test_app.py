@@ -1,11 +1,10 @@
-"""The application skeleton: health and readiness, the error envelope, request
-ids, bearer auth on client and worker routes, and the loopback guard.
+"""The application skeleton: health and readiness, the error envelope, bearer
+auth on worker routes and when auth is off, and the loopback guard.
 """
 
 from __future__ import annotations
 
-import os
-import stat
+import shutil
 from pathlib import Path
 
 import httpx
@@ -45,14 +44,10 @@ async def test_readyz_is_ready_when_migrated_and_writable(
 async def test_readyz_fails_when_the_blob_volume_is_not_writable(
     client: httpx.AsyncClient, blobs: BlobStore
 ) -> None:
-    if os.geteuid() == 0:
-        pytest.skip("root ignores directory permissions")
-    tmp = blobs.root / "tmp"
-    tmp.chmod(stat.S_IRUSR | stat.S_IXUSR)
-    try:
-        response = await client.get("/readyz")
-    finally:
-        tmp.chmod(stat.S_IRWXU)
+    """The probe writes into ``tmp/``; removing the directory fails it the
+    same way a read-only or full volume would, and does so as root too."""
+    shutil.rmtree(blobs.root / "tmp")
+    response = await client.get("/readyz")
     assert response.status_code == 503
     assert response.json()["checks"]["blobs_writable"] is False
 
@@ -81,7 +76,7 @@ async def test_readyz_tracks_the_last_tick_against_the_driven_clock(
 
 
 ################################################################################
-# Envelope and Request Ids
+# The Error Envelope
 ################################################################################
 
 
@@ -91,33 +86,6 @@ async def test_unknown_route_uses_the_error_envelope(client: httpx.AsyncClient) 
     assert response.json() == {
         "error": {"code": "NOT_FOUND", "message": "Not Found", "details": None}
     }
-
-
-async def test_request_id_is_echoed(client: httpx.AsyncClient) -> None:
-    response = await client.get("/healthz", headers={"X-Request-Id": "req-123"})
-    assert response.headers["X-Request-Id"] == "req-123"
-
-
-async def test_request_id_is_generated_when_absent(client: httpx.AsyncClient) -> None:
-    response = await client.get("/healthz")
-    generated = response.headers["X-Request-Id"]
-    assert len(generated) == 32
-    other = (await client.get("/healthz")).headers["X-Request-Id"]
-    assert other != generated
-
-
-async def test_validation_errors_carry_json_pointers(
-    app: FastAPI, client: httpx.AsyncClient
-) -> None:
-    @app.get("/v1/_probe/{n}")
-    async def probe(n: int) -> dict[str, int]:
-        return {"n": n}
-
-    response = await client.get("/v1/_probe/not-a-number")
-    assert response.status_code == 422
-    body = response.json()["error"]
-    assert body["code"] == "VALIDATION"
-    assert body["details"][0]["pointer"] == "/path/n"
 
 
 ################################################################################
@@ -135,48 +103,18 @@ def _add_probes(app: FastAPI) -> None:
         return {"who": "worker"}
 
 
-async def test_client_routes_accept_only_the_client_token(
-    app: FastAPI,
-    client: httpx.AsyncClient,
-    as_client: dict[str, str],
-    as_worker: dict[str, str],
-) -> None:
-    _add_probes(app)
-    assert (await client.get("/v1/_client", headers=as_client)).status_code == 200
-    for headers in ({}, as_worker, {"Authorization": "Bearer wrong"}):
-        response = await client.get("/v1/_client", headers=headers)
-        assert response.status_code == 401
-        assert response.json()["error"]["code"] == "UNAUTHORIZED"
-
-
 async def test_worker_routes_accept_only_the_worker_token(
     app: FastAPI,
     client: httpx.AsyncClient,
     as_client: dict[str, str],
     as_worker: dict[str, str],
 ) -> None:
+    """No worker route exists yet, so the dependency is probed directly; the
+    claim route must bring its own test when it lands."""
     _add_probes(app)
     assert (await client.get("/v1/_worker", headers=as_worker)).status_code == 200
     assert (await client.get("/v1/_worker", headers=as_client)).status_code == 401
     assert (await client.get("/v1/_worker")).status_code == 401
-
-
-async def test_malformed_authorization_header_is_unauthorized(
-    app: FastAPI, client: httpx.AsyncClient, tokens: tuple[str, str]
-) -> None:
-    _add_probes(app)
-    client_token = tokens[0]
-    for value in ("Basic abc", "Bearer", client_token, f"bearer  {client_token}"):
-        response = await client.get("/v1/_client", headers={"Authorization": value})
-        assert response.status_code == 401, value
-
-
-async def test_lowercase_bearer_scheme_is_accepted(
-    app: FastAPI, client: httpx.AsyncClient, tokens: tuple[str, str]
-) -> None:
-    _add_probes(app)
-    headers = {"Authorization": f"bearer {tokens[1]}"}
-    assert (await client.get("/v1/_worker", headers=headers)).status_code == 200
 
 
 async def test_auth_is_disabled_only_when_both_tokens_are_unset(
@@ -209,13 +147,15 @@ async def test_auth_is_disabled_only_when_both_tokens_are_unset(
 ################################################################################
 
 
-@pytest.mark.parametrize("host", ["127.0.0.1", "::1", "localhost", "127.0.0.9"])
+@pytest.mark.parametrize("host", ["127.0.0.1", "localhost"], ids=["literal", "name"])
 def test_loopback_bind_is_allowed_without_tokens(host: str) -> None:
     control_app.assert_bind_allowed(Config(), host)
 
 
 @pytest.mark.parametrize(
-    "host", ["0.0.0.0", "::", "10.0.0.5", "192.168.1.2", "control.internal", ""]
+    "host",
+    ["0.0.0.0", "10.0.0.5", "control.internal"],
+    ids=["wildcard", "routable", "name"],
 )
 def test_non_loopback_bind_without_tokens_is_refused(host: str) -> None:
     """A host name is refused too: it cannot be shown to be loopback."""

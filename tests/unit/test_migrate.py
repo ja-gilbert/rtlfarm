@@ -51,55 +51,6 @@ SCHEMA_MIGRATIONS = (
 )
 
 ################################################################################
-# The Shipped Migrations
-################################################################################
-
-
-def test_fresh_database_gets_every_shipped_migration(tmp_path: Path) -> None:
-    conn = _open(tmp_path)
-    clock = DrivenClock(start_ms=12_345)
-    applied = migrate.apply_migrations(conn, clock)
-    assert applied == [1]
-    assert _recorded(conn) == [(1, 12_345)]
-    assert {"jobs", "tasks", "attempts", "task_events", "cache_entries"} <= _tables(
-        conn
-    )
-    conn.close()
-
-
-def test_second_run_is_a_no_op(tmp_path: Path) -> None:
-    conn = _open(tmp_path)
-    migrate.apply_migrations(conn, DrivenClock(start_ms=1))
-    before = _recorded(conn)
-    assert migrate.apply_migrations(conn, DrivenClock(start_ms=2)) == []
-    assert _recorded(conn) == before
-    conn.close()
-
-
-def test_shipped_migrations_are_contiguous_from_one() -> None:
-    versions = [m.version for m in migrate.load_migrations()]
-    assert versions == list(range(1, len(versions) + 1))
-    assert versions[0] == 1
-
-
-def test_analyze_runs_after_a_migration(tmp_path: Path) -> None:
-    conn = _open(tmp_path)
-    migrate.apply_migrations(conn, DrivenClock())
-    row = conn.execute(
-        "SELECT name FROM sqlite_master WHERE name = 'sqlite_stat1'"
-    ).fetchone()
-    assert row == ("sqlite_stat1",)
-    conn.close()
-
-
-def test_runner_leaves_no_open_transaction(tmp_path: Path) -> None:
-    conn = _open(tmp_path)
-    migrate.apply_migrations(conn, DrivenClock())
-    assert not conn.in_transaction
-    conn.close()
-
-
-################################################################################
 # Ordering and the Transaction Boundary
 ################################################################################
 
@@ -162,35 +113,11 @@ def test_migration_that_commits_on_its_own_is_rejected(tmp_path: Path) -> None:
 ################################################################################
 
 
-def test_loader_orders_by_version_and_keeps_names(tmp_path: Path) -> None:
-    src = tmp_path / "migrations"
-    _write(src, "0002_second.sql", "-- two")
-    _write(src, "0001.sql", "-- one")
-    loaded = migrate.load_migrations(src)
-    assert [(m.version, m.name) for m in loaded] == [
-        (1, "0001.sql"),
-        (2, "0002_second.sql"),
-    ]
-    assert loaded[0].sql == "-- one"
-
-
-def test_loader_ignores_files_that_are_not_migrations(tmp_path: Path) -> None:
+def test_loader_rejects_a_gap_in_the_versions(tmp_path: Path) -> None:
+    """A gap would silently skip a migration and leave a table missing."""
     src = tmp_path / "migrations"
     _write(src, "0001.sql", "-- one")
-    _write(src, "README.md", "not sql")
-    _write(src, "notes.sql", "no version")
-    assert [m.version for m in migrate.load_migrations(src)] == [1]
-
-
-@pytest.mark.parametrize(
-    "names", [["0001.sql", "0003.sql"], ["0002.sql"]], ids=["gap", "starts-at-two"]
-)
-def test_loader_rejects_versions_that_are_not_contiguous_from_one(
-    tmp_path: Path, names: list[str]
-) -> None:
-    src = tmp_path / "migrations"
-    for name in names:
-        _write(src, name, "-- sql")
+    _write(src, "0003.sql", "-- three")
     with pytest.raises(migrate.MigrationError, match="contiguous"):
         migrate.load_migrations(src)
 

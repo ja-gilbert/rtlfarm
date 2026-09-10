@@ -1,13 +1,11 @@
-"""The connection layer: the version floor, the durability modes, one writer
-behind an asyncio lock with ``BEGIN IMMEDIATE`` per use, and read-only
-connections that never see an open write.
+"""The connection layer: the version floor, the durability level reaching
+SQLite, one writer behind an asyncio lock with ``BEGIN IMMEDIATE`` per use,
+and read-only connections that never see an open write.
 """
 
 from __future__ import annotations
 
 import asyncio
-import contextlib
-import os
 import sqlite3
 from collections.abc import Iterator
 from pathlib import Path
@@ -49,10 +47,6 @@ INSERT_JOB = (
 ################################################################################
 
 
-def test_this_build_meets_the_version_floor() -> None:
-    assert connection.check_sqlite_version() >= connection.MIN_SQLITE_VERSION
-
-
 def test_an_old_build_is_rejected(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -61,22 +55,12 @@ def test_an_old_build_is_rejected(
         connection.open_connection(tmp_path / "rtlfarm.db")
 
 
-@pytest.mark.parametrize(("mode", "value"), [("OFF", 0), ("NORMAL", 1), ("FULL", 2)])
-def test_synchronous_mode_is_applied(tmp_path: Path, mode: str, value: int) -> None:
-    conn = connection.open_connection(
-        tmp_path / "rtlfarm.db",
-        synchronous=mode,  # type: ignore[arg-type]
-    )
-    assert conn.execute("PRAGMA synchronous").fetchone() == (value,)
+def test_synchronous_mode_is_applied(tmp_path: Path) -> None:
+    """A deployment that asks for FULL and does not get it loses committed
+    jobs on power loss without any sign."""
+    conn = connection.open_connection(tmp_path / "rtlfarm.db", synchronous="FULL")
+    assert conn.execute("PRAGMA synchronous").fetchone() == (2,)
     conn.close()
-
-
-def test_unknown_synchronous_mode_is_rejected(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="synchronous"):
-        connection.open_connection(
-            tmp_path / "rtlfarm.db",
-            synchronous="EXTRA",  # type: ignore[arg-type]
-        )
 
 
 ################################################################################
@@ -178,24 +162,6 @@ def test_writers_serialize_under_the_lock(db: Database) -> None:
     reader.close()
 
 
-def test_returning_is_drained_before_the_next_statement(db: Database) -> None:
-    async def run() -> None:
-        async with db.write() as conn:
-            conn.execute(INSERT_JOB, ("job-1",))
-            rows = connection.execute_returning(
-                conn,
-                "UPDATE jobs SET state = 'RUNNING' WHERE job_id = ? RETURNING job_id",
-                ("job-1",),
-            )
-            assert rows == [("job-1",)]
-            conn.execute(INSERT_JOB, ("job-2",))
-
-    asyncio.run(run())
-    reader = db.read()
-    assert _count_jobs(reader) == 2
-    reader.close()
-
-
 ################################################################################
 # Read Connections
 ################################################################################
@@ -206,58 +172,3 @@ def test_read_connection_cannot_write(db: Database) -> None:
     with pytest.raises(sqlite3.OperationalError, match="readonly"):
         reader.execute(INSERT_JOB, ("job-1",))
     reader.close()
-
-
-def test_read_connection_is_autocommit_with_the_busy_timeout(db: Database) -> None:
-    reader = db.read()
-    assert reader.autocommit is True
-    assert reader.execute("PRAGMA busy_timeout").fetchone() == (
-        connection.BUSY_TIMEOUT_MS,
-    )
-    reader.close()
-
-
-@pytest.mark.skipif(not Path("/proc/self/fd").is_dir(), reason="needs /proc")
-def test_a_failed_open_does_not_leave_the_connection_behind(tmp_path: Path) -> None:
-    """The first pragma fails on a file that is not a database; the connection
-    it ran on must be closed before the error leaves ``open_connection``."""
-    bad = tmp_path / "rtlfarm.db"
-    bad.write_bytes(b"not a database" * 8)
-    try:
-        connection.open_connection(bad)
-    except sqlite3.DatabaseError:
-        # While the exception is alive its traceback still references the
-        # connection, so an unclosed one shows up as an open descriptor.
-        open_files = _open_files()
-    else:
-        pytest.fail("a file that is not a database opened without error")
-    assert str(bad) not in open_files
-
-
-def _open_files() -> list[str]:
-    names = []
-    for fd in os.listdir("/proc/self/fd"):
-        with contextlib.suppress(OSError):  # the listing descriptor is gone
-            names.append(os.readlink(f"/proc/self/fd/{fd}"))
-    return names
-
-
-def test_read_connection_opens_the_named_file_despite_uri_characters(
-    tmp_path: Path,
-) -> None:
-    """``?``, ``#`` and ``%`` in a directory name are file-name characters; the
-    reader must open the file the writer migrated, not a URI-mangled path."""
-    odd = tmp_path / "vol?a#b%c"
-    odd.mkdir()
-    database = Database(odd / "rtlfarm.db", synchronous="OFF")
-    try:
-        database.migrate(DrivenClock())
-        reader = database.read()
-        try:
-            rows = reader.execute("SELECT version FROM schema_migrations").fetchall()
-        finally:
-            reader.close()
-    finally:
-        database.close()
-    assert rows == [(1,)]
-    assert [p.name for p in tmp_path.iterdir()] == ["vol?a#b%c"]

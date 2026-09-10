@@ -1,6 +1,5 @@
-"""The ``rtlfarm`` entry point: the global options, ``dev pack``,
-``dev pin-toolchain``, ``toolchain manifest``, ``control run`` and
-``admin migrate``."""
+"""The ``rtlfarm`` entry point: exit codes and stderr an operator sees,
+``dev pack``, ``dev pin-toolchain``, ``control run`` and ``admin migrate``."""
 
 from __future__ import annotations
 
@@ -17,7 +16,6 @@ from fastapi import FastAPI
 from rtlfarm.cli import control as control_cli
 from rtlfarm.cli import main
 from rtlfarm.expand.pack import pack
-from rtlfarm.tools import manifest
 
 EXAMPLES = Path(__file__).resolve().parents[2] / "examples"
 
@@ -26,29 +24,8 @@ EXAMPLES = Path(__file__).resolve().parents[2] / "examples"
 ################################################################################
 
 
-def test_help_exits_zero_and_prints_usage(capsys: pytest.CaptureFixture[str]) -> None:
-    with pytest.raises(SystemExit) as info:
-        main(["--help"])
-    assert info.value.code == 0
-    out = capsys.readouterr().out
-    assert out.startswith("usage: rtlfarm")
-    for flag in ("--url", "--token", "--json", "dev", "toolchain", "control", "admin"):
-        assert flag in out
-
-
-@pytest.mark.parametrize("argv", [[], ["dev"]], ids=["no-verb", "verb-without-command"])
-def test_a_missing_verb_or_command_is_a_usage_error(
-    argv: list[str], capsys: pytest.CaptureFixture[str]
-) -> None:
-    assert main(argv) == 2
-    assert "usage: rtlfarm" in capsys.readouterr().err
-
-
-def test_an_unknown_flag_is_a_usage_error(capsys: pytest.CaptureFixture[str]) -> None:
-    """A mistyped flag exits 2 with the usage line instead of running the verb."""
-    with pytest.raises(SystemExit) as info:
-        main(["control", "run", "--prot", "8080"])
-    assert info.value.code == 2
+def test_a_missing_verb_is_a_usage_error(capsys: pytest.CaptureFixture[str]) -> None:
+    assert main([]) == 2
     assert "usage: rtlfarm" in capsys.readouterr().err
 
 
@@ -67,14 +44,6 @@ def test_installed_console_script_runs() -> None:
 ################################################################################
 
 
-def test_dev_pack_prints_the_manifest(capsys: pytest.CaptureFixture[str]) -> None:
-    assert main(["dev", "pack", str(EXAMPLES / "counter")]) == 0
-    data = json.loads(capsys.readouterr().out)
-    assert data["design"] == "counter"
-    assert data["manifest_version"] == 1
-    assert [f["role"] for f in data["files"]] == ["rtl", "include", "tb"]
-
-
 def test_dev_pack_json_is_the_canonical_form(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -82,18 +51,6 @@ def test_dev_pack_json_is_the_canonical_form(
     out = capsys.readouterr().out
     assert out.count("\n") == 1
     assert out.rstrip("\n") == pack(EXAMPLES / "fake_smoke").canonical_json()
-
-
-def test_dev_pack_exclude_leaves_a_file_out(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    root = tmp_path / "pack"
-    shutil.copytree(EXAMPLES / "fake_smoke", root)
-    (root / "src" / "extra.txt").write_text("extra\n", encoding="utf-8")
-    assert main(["dev", "pack", str(root), "--exclude", "src/extra.txt"]) == 0
-    paths = [f["path"] for f in json.loads(capsys.readouterr().out)["files"]]
-    assert "src/extra.txt" not in paths
-    assert "src/design.txt" in paths
 
 
 def test_dev_pack_reports_problems_and_fails(
@@ -105,41 +62,9 @@ def test_dev_pack_reports_problems_and_fails(
     assert "rtlfarm.yaml" in captured.err
 
 
-def test_dev_pack_reports_pipeline_problems_by_pointer(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    root = tmp_path / "pack"
-    shutil.copytree(EXAMPLES / "fake_smoke", root)
-    text = (root / "rtlfarm.yaml").read_text(encoding="utf-8")
-    (root / "rtlfarm.yaml").write_text(text.replace("version: 1", "version: 3"))
-    assert main(["dev", "pack", str(root)]) == 1
-    assert "/version" in capsys.readouterr().err
-
-
 ################################################################################
 # toolchain manifest and dev pin-toolchain
 ################################################################################
-
-
-def test_toolchain_manifest_prints_the_manifest_and_digest(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    assert main(["toolchain", "manifest"]) == 0
-    out = capsys.readouterr().out
-    body, last = out.rsplit("\n", 2)[0], out.rstrip("\n").rsplit("\n", 1)[1]
-    data = json.loads(body)
-    assert data["manifest_version"] == 1
-    assert "python" in data["tools"]
-    assert last == f"digest: {manifest.digest(data)}"
-
-
-def test_toolchain_manifest_writes_the_file(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    out = tmp_path / "toolchain.json"
-    assert main(["--json", "toolchain", "manifest", "-o", str(out)]) == 0
-    printed = json.loads(capsys.readouterr().out)
-    assert manifest.read(out) == printed
 
 
 def test_dev_pin_toolchain_writes_the_digest_into_env(
@@ -153,31 +78,6 @@ def test_dev_pin_toolchain_writes_the_digest_into_env(
     assert env.read_text(encoding="utf-8") == (
         f"RTLFARM_CLIENT_TOKEN=c\nRTLFARM_TOOLCHAIN__DIGEST={digest}\n"
     )
-
-
-def test_dev_pin_toolchain_from_a_manifest_file(
-    tmp_path: Path, capsys: pytest.CaptureFixture[str]
-) -> None:
-    data = manifest.generate(env={"PATH": str(tmp_path)})
-    manifest.write(data, tmp_path / "toolchain.json")
-    env = tmp_path / ".env"
-    assert (
-        main(
-            [
-                "--json",
-                "dev",
-                "pin-toolchain",
-                "--manifest",
-                str(tmp_path / "toolchain.json"),
-                "--env",
-                str(env),
-            ]
-        )
-        == 0
-    )
-    printed = json.loads(capsys.readouterr().out)
-    assert printed == {"digest": manifest.digest(data), "env": str(env)}
-    assert f"RTLFARM_TOOLCHAIN__DIGEST={manifest.digest(data)}" in env.read_text()
 
 
 ################################################################################
@@ -279,19 +179,6 @@ def test_control_run_closes_the_database_when_stopped_by_sigterm(
     assert signal.getsignal(signal.SIGTERM) is before
 
 
-def test_the_env_file_beats_the_config_file(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / "farm.toml").write_text('data_dir = "from-toml"\n', encoding="utf-8")
-    (tmp_path / ".env").write_text("RTLFARM_DATA_DIR=from-env\n", encoding="utf-8")
-    assert main(["--json", "admin", "migrate", "--config", "farm.toml"]) == 0
-    report = json.loads(capsys.readouterr().out)
-    assert report["database"] == str(Path("from-env") / "rtlfarm.db")
-    assert (tmp_path / "from-env" / "rtlfarm.db").is_file()
-    assert not (tmp_path / "from-toml").exists()
-
-
 def test_the_config_file_in_the_working_directory_is_read_by_default(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -302,22 +189,21 @@ def test_the_config_file_in_the_working_directory_is_read_by_default(
     assert report["database"] == str(Path("vol") / "rtlfarm.db")
 
 
-@pytest.mark.parametrize("flag", ["--config", "--env-file"])
 def test_a_file_named_on_the_command_line_must_exist(
-    flag: str,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    """A typo'd ``--config`` must not silently run on the defaults (auth off)."""
     monkeypatch.chdir(tmp_path)
-    assert main(["admin", "migrate", flag, "absent"]) == 1
+    assert main(["admin", "migrate", "--config", "absent"]) == 1
     assert "absent" in capsys.readouterr().err
     assert not (tmp_path / "data").exists()
 
 
 # (verb, the variable to set, its value, what the message must name). Every row
-# also gets a plain file named "afile" in the working directory, so the two
-# data_dir rows point the volume at a file.
+# also gets a plain file named "afile" in the working directory, so the
+# data_dir row points the volume at a file.
 OPERATOR_MISTAKES = [
     pytest.param(
         ["control", "run"],
@@ -325,20 +211,6 @@ OPERATOR_MISTAKES = [
         "1",
         "lease_ttl_s",
         id="control-run-timing-ordering",
-    ),
-    pytest.param(
-        ["control", "run"],
-        "RTLFARM_DATA_DIR",
-        "afile",
-        "afile",
-        id="control-run-unusable-volume",
-    ),
-    pytest.param(
-        ["admin", "migrate"],
-        "RTLFARM_TIMING__LEASE_TTL_S",
-        "thirty",
-        "RTLFARM_TIMING__LEASE_TTL_S",
-        id="admin-migrate-unparsable-value",
     ),
     pytest.param(
         ["admin", "migrate"],

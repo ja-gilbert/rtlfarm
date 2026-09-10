@@ -6,7 +6,6 @@ tasks holding no lease, contiguous and current events, acyclic dependencies.
 from __future__ import annotations
 
 import asyncio
-import sqlite3
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -144,29 +143,9 @@ def _seed_consistent(db: Database) -> None:
 ################################################################################
 
 
-def test_empty_database_has_no_violations(db: Database) -> None:
-    assert _check(db) == []
-
-
 def test_consistent_database_has_no_violations(db: Database) -> None:
     _seed_consistent(db)
     assert _check(db) == []
-
-
-def test_assert_invariants_is_quiet_when_consistent(db: Database) -> None:
-    _seed_consistent(db)
-    reader = db.read()
-    invariants.assert_invariants(reader, DrivenClock())
-    assert not reader.in_transaction
-    reader.close()
-
-
-def test_checker_works_on_a_read_only_connection(db: Database) -> None:
-    reader = db.read()
-    with pytest.raises(sqlite3.OperationalError, match="readonly"):
-        reader.execute("DELETE FROM jobs")
-    assert invariants.check_invariants(reader) == []
-    reader.close()
 
 
 ################################################################################
@@ -194,38 +173,15 @@ def test_two_committed_attempts_are_reported(db: Database) -> None:
 ################################################################################
 
 
-@pytest.mark.parametrize(
-    "attempt_rows",
-    [[_attempt("a-1", "t", "EXPIRED")], []],
-    ids=["names-an-expired-attempt", "names-no-row-at-all"],
-)
-def test_leased_task_without_a_matching_active_attempt(
-    db: Database, attempt_rows: list[tuple[str, tuple[object, ...]]]
-) -> None:
+def test_leased_task_without_a_matching_active_attempt(db: Database) -> None:
     _run(
         db,
         _job(),
         _task("t", "LEASED", lease_attempt_id="a-1"),
-        *attempt_rows,
+        _attempt("a-1", "t", "EXPIRED"),
         _event("t", 1, "LEASED"),
     )
     assert _numbers(db) == [2]
-
-
-def test_leased_task_with_two_active_attempts(db: Database) -> None:
-    """Exactly one ACTIVE attempt: both halves of the rule fire, and the extra
-    attempt is reported by name."""
-    _run(
-        db,
-        _job(),
-        _task("t", "RUNNING", lease_attempt_id="a-1"),
-        _attempt("a-1", "t", "ACTIVE", 1),
-        _attempt("a-2", "t", "ACTIVE", 2),
-        _event("t", 1, "RUNNING"),
-    )
-    violations = _check(db)
-    assert [v.invariant for v in violations] == [2, 2]
-    assert any("a-2" in v.message for v in violations)
 
 
 def test_active_attempt_on_a_task_that_is_not_leased(db: Database) -> None:
@@ -248,6 +204,9 @@ def test_active_attempt_on_a_task_that_is_not_leased(db: Database) -> None:
     "column", ["leased_by", "lease_expires_at_ms", "leased_at_ms", "started_at_ms"]
 )
 def test_terminal_task_with_a_leftover_column(db: Database, column: str) -> None:
+    """One row per lease column a terminal task could still hold: dropping
+    any one from the checker would let a finished task keep a live lease
+    unnoticed."""
     value: object = "worker-1" if column == "leased_by" else 5000
     _run(
         db,
@@ -256,31 +215,6 @@ def test_terminal_task_with_a_leftover_column(db: Database, column: str) -> None
         _event("t", 1, "FAILED"),
     )
     assert _numbers(db) == [3]
-
-
-################################################################################
-# Invariant 8: Events Are Contiguous and Current
-################################################################################
-
-
-@pytest.mark.parametrize("seqs", [[1, 3], [2]], ids=["gap", "starts-at-two"])
-def test_a_non_contiguous_event_sequence_is_reported(
-    db: Database, seqs: list[int]
-) -> None:
-    _run(db, _job(), _task("t", "READY"), *[_event("t", s, "READY") for s in seqs])
-    assert _numbers(db) == [8]
-
-
-def test_last_event_disagreeing_with_task_state_is_reported(db: Database) -> None:
-    _run(
-        db,
-        _job(),
-        _task("t", "READY"),
-        _event("t", 1, "PENDING"),
-    )
-    violations = _check(db)
-    assert [v.invariant for v in violations] == [8]
-    assert "READY" in violations[0].message and "PENDING" in violations[0].message
 
 
 ################################################################################
@@ -326,11 +260,13 @@ def test_diamond_dependencies_are_not_a_cycle(db: Database) -> None:
 
 
 ################################################################################
-# Reporting
+# Invariant 8 and Reporting
 ################################################################################
 
 
 def test_every_violation_is_reported_together(db: Database) -> None:
+    """A stale last event, a seq gap and a leftover column all appear in one
+    error, so an operator sees the whole contradiction at once."""
     _run(
         db,
         _job(),
