@@ -258,6 +258,14 @@ def test_reserved_plusargs() -> None:
     assert _pointers(data) == ["/targets/1/plusargs/dump", "/targets/1/plusargs/seed"]
 
 
+def test_a_seed_listed_twice_is_rejected() -> None:
+    """Regression: two equal seeds expanded to two identical task ids and the
+    submit route died on the primary key, an unhandled 500."""
+    assert _pointers(_mutate(["targets", 1, "seeds"], [3, 17, 3])) == [
+        "/targets/1/seeds/2"
+    ]
+
+
 def test_duplicate_target_names() -> None:
     data = _mutate(["targets", 1, "name"], "tb_basic")
     assert _pointers(data) == ["/targets/1/name"]
