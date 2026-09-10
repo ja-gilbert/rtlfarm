@@ -4,9 +4,10 @@
 harness has armed an action for that name (``raise`` in the fast tier,
 ``os._exit(1)`` in the process tier).
 
-The Core set is closed so a coverage test can assert that every member fires
-somewhere in the suite, and the name is checked on every call, enabled or
-not, so a misspelled hook fails loudly instead of silently never firing.
+The Core set is closed so a coverage test can assert, once the scheduler and
+the claim exist, that every member fires somewhere in the suite (spec §20.2).
+The name is checked on every call, enabled or not, so a misspelled hook
+fails loudly instead of silently never firing.
 """
 
 from __future__ import annotations

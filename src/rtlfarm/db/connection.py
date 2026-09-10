@@ -106,7 +106,8 @@ def execute_returning(
     """Run a statement with ``RETURNING`` and drain it before anything else runs.
 
     SQLite forbids modifying the database while a ``RETURNING`` statement is
-    still being stepped, so the rows are fetched to exhaustion here.
+    still being stepped, so the rows are fetched to exhaustion here. Written
+    for the claim transaction (spec §7.3); nothing calls it until then.
     """
     rows: list[tuple[object, ...]] = conn.execute(sql, params).fetchall()
     return rows

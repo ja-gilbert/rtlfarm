@@ -23,7 +23,6 @@ ROLES: tuple[str, ...] = ("rtl", "include", "tb", "data")
 Role = Literal["rtl", "include", "tb", "data"]
 
 #: The tools the Core tier can run.
-TOOLS: tuple[str, ...] = ("fake", "iverilog")
 Tool = Literal["fake", "iverilog"]
 
 #: The upstream artifact kinds a stage may consume.
