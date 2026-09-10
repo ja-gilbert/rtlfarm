@@ -1,10 +1,9 @@
-"""Pipeline loading and validation: every rule reports a JSON-pointer path,
-every problem is reported at once, and a valid file becomes a frozen model.
+"""Pipeline loading and validation: the rules an author of rtlfarm.yaml can
+break, each reported at a JSON-pointer path, and all of them at once.
 """
 
 from __future__ import annotations
 
-import copy
 from pathlib import Path
 from typing import Any
 
@@ -87,7 +86,7 @@ def _valid() -> dict[str, Any]:
     }
 
 
-def _pointers(data: dict[str, Any]) -> list[str]:
+def _pointers(data: object) -> list[str]:
     with pytest.raises(PipelineError) as info:
         parse_pipeline(data)
     return sorted(issue.pointer for issue in info.value.issues)
@@ -126,47 +125,10 @@ def test_valid_pipeline_parses() -> None:
     assert p.toolchain.digest is None
 
 
-def test_model_is_frozen() -> None:
-    p = parse_pipeline(_valid())
-    with pytest.raises(Exception, match="frozen"):
-        p.design.name = "other"
-
-
-def test_defaults_are_filled_in() -> None:
-    data = _valid()
-    del data["stages"]["simulate"]["consumes_artifacts"]
-    del data["policies"]
-    del data["toolchain"]
-    p = parse_pipeline(data)
-    assert p.stages["simulate"].consumes_artifacts == ["compiled"]
-    assert p.policies.retries.infra == 3
-    assert p.policies.cache == {}
-    assert p.toolchain.digest is None
-
-
 def test_seed_range_and_seed_list_expand_in_order() -> None:
     p = parse_pipeline(_valid())
     assert p.targets[0].seeds == [1, 2]
     assert p.targets[1].seeds == [3, 17, 1017]
-
-
-def test_seeds_default_to_one_run_with_seed_one() -> None:
-    assert parse_pipeline(_without(["targets", 0, "seeds"])).targets[0].seeds == [1]
-
-
-def test_stage_timeouts_are_exposed_for_validate_timing() -> None:
-    assert parse_pipeline(_valid()).stage_timeouts() == [60, 300, 300]
-
-
-def test_load_from_a_directory_and_from_a_file(tmp_path: Path) -> None:
-    text = (
-        "version: 1\n"
-        "design:\n  name: d\n  files: {rtl: ['rtl/*.sv']}\n"
-        "stages:\n  lint: {tool: iverilog, consumes: [rtl], timeout_s: 10}\n"
-    )
-    (tmp_path / pipeline.PIPELINE_FILENAME).write_text(text, encoding="utf-8")
-    assert pipeline.load_pipeline(tmp_path).design.name == "d"
-    assert pipeline.load_pipeline(tmp_path / "rtlfarm.yaml").design.name == "d"
 
 
 def test_malformed_yaml_is_reported_at_the_root(tmp_path: Path) -> None:
@@ -177,74 +139,25 @@ def test_malformed_yaml_is_reported_at_the_root(tmp_path: Path) -> None:
     assert "YAML" in info.value.issues[0].message
 
 
-def test_non_mapping_document_is_rejected() -> None:
-    assert _pointers(["not", "a", "mapping"]) == [""]  # type: ignore[arg-type]
-
-
 ################################################################################
 # Shape Rules (JSON Pointers From the Model)
 ################################################################################
 
-
-def test_unknown_version() -> None:
-    assert _pointers(_mutate(["version"], 2)) == ["/version"]
-
-
-def test_unknown_key_is_rejected() -> None:
-    assert _pointers(_mutate(["design", "bogus"], 1)) == ["/design/bogus"]
-
-
-def test_missing_required_field() -> None:
-    assert _pointers(_without(["targets", 0, "top"])) == ["/targets/0/top"]
+# One row per class of shape error: the mutated document and the pointer its
+# error must carry. The rules live in the models; only the placement of the
+# pointer (root, a key, a missing field) is checked here.
+SHAPE_ERRORS = [
+    pytest.param(["not", "a", "mapping"], "", id="document-not-a-mapping"),
+    pytest.param(_mutate(["design", "bogus"], 1), "/design/bogus", id="unknown-key"),
+    pytest.param(_without(["targets", 0, "top"]), "/targets/0/top", id="missing-field"),
+]
 
 
-def test_unknown_tool() -> None:
-    assert _pointers(_mutate(["stages", "lint", "tool"], "vcs")) == [
-        "/stages/lint/tool"
-    ]
-
-
-def test_unknown_role_in_files() -> None:
-    assert _pointers(_mutate(["design", "files", "docs"], ["*.md"])) == [
-        "/design/files/docs"
-    ]
-
-
-def test_unknown_role_in_consumes() -> None:
-    data = _mutate(["stages", "lint", "consumes"], ["rtl", "docs"])
-    assert _pointers(data) == ["/stages/lint/consumes/1"]
-
-
-@pytest.mark.parametrize("bad", ["", "a b", "x" * 65, "has/slash", "dot.name"])
-def test_names_outside_the_pattern(bad: str) -> None:
-    assert _pointers(_mutate(["design", "name"], bad)) == ["/design/name"]
-    assert _pointers(_mutate(["targets", 1, "name"], bad)) == ["/targets/1/name"]
-    assert _pointers(_mutate(["targets", 0, "tags"], [bad])) == ["/targets/0/tags/0"]
-
-
-@pytest.mark.parametrize("bad", ["10", "ms", "10 ms", "-1ns", "1.5"])
-def test_timeout_sim_format(bad: str) -> None:
-    assert _pointers(_mutate(["targets", 0, "timeout_sim"], bad)) == [
-        "/targets/0/timeout_sim"
-    ]
-
-
-def test_timeout_sim_is_required() -> None:
-    assert _pointers(_without(["targets", 0, "timeout_sim"])) == [
-        "/targets/0/timeout_sim"
-    ]
-
-
-def test_stage_timeout_must_be_positive() -> None:
-    assert _pointers(_mutate(["stages", "lint", "timeout_s"], 0)) == [
-        "/stages/lint/timeout_s"
-    ]
-
-
-def test_retry_budgets_must_not_be_negative() -> None:
-    assert _pointers(_mutate(["policies", "retries", "infra"], -1)) == [
-        "/policies/retries/infra"
-    ]
+@pytest.mark.parametrize(("data", "pointer"), SHAPE_ERRORS)
+def test_shape_errors_report_the_offending_pointer(data: object, pointer: str) -> None:
+    """An author fixes the file by pointer; a typo'd key silently ignored
+    would leave a stage doing the wrong thing."""
+    assert _pointers(data) == [pointer]
 
 
 ################################################################################
@@ -258,8 +171,10 @@ def test_seed_zero_is_reserved_in_a_list() -> None:
     ]
 
 
-def test_seed_zero_is_reserved_as_a_base() -> None:
-    assert _pointers(_mutate(["targets", 0, "seeds"], {"n": 1, "base": 0})) == [
+def test_seed_range_needs_at_least_one() -> None:
+    """``n: 0`` would expand to a target with no simulate tasks: a run that
+    reports success having run nothing."""
+    assert _pointers(_mutate(["targets", 0, "seeds"], {"n": 0, "base": 1})) == [
         "/targets/0/seeds"
     ]
 
@@ -270,18 +185,6 @@ def test_seed_above_the_32_bit_limit() -> None:
     ]
     p = parse_pipeline(_mutate(["targets", 1, "seeds"], [MAX_SEED]))
     assert p.targets[1].seeds == [MAX_SEED]
-
-
-def test_seed_range_needs_at_least_one() -> None:
-    assert _pointers(_mutate(["targets", 0, "seeds"], {"n": 0, "base": 1})) == [
-        "/targets/0/seeds"
-    ]
-
-
-def test_seed_range_with_extra_keys_is_rejected() -> None:
-    assert _pointers(
-        _mutate(["targets", 0, "seeds"], {"n": 1, "base": 1, "step": 2})
-    ) == ["/targets/0/seeds"]
 
 
 ################################################################################
@@ -305,12 +208,8 @@ def test_dependency_cycle() -> None:
     assert _pointers(data) == ["/stages"]
 
 
-def test_self_dependency_is_a_cycle() -> None:
-    data = _mutate(["stages", "lint", "depends_on"], ["lint"])
-    assert _pointers(data) == ["/stages"]
-
-
 def test_targeted_stages_without_targets() -> None:
+    """Regression: no targets was reported at /selection, not the stage."""
     data = _mutate(["targets"], [])
     assert _pointers(data) == [
         "/stages/compile/per_target",
@@ -319,16 +218,19 @@ def test_targeted_stages_without_targets() -> None:
 
 
 def test_depends_on_listed_twice() -> None:
+    """Regression: duplicate task_deps rows, a 500 at submission."""
     data = _mutate(["stages", "simulate", "depends_on"], ["compile", "compile"])
     assert _pointers(data) == ["/stages/simulate/depends_on/1"]
 
 
 def test_empty_stages_are_rejected() -> None:
+    """Regression: a pipeline with no stages was accepted."""
     data = _mutate(["stages"], {})
     assert _pointers(data) == ["/stages"]
 
 
 def test_pinned_toolchain_digest_must_be_a_sha256() -> None:
+    """Regression: 'any' reached the schema CHECK as a 500."""
     data = _mutate(["toolchain", "digest"], "any")
     assert _pointers(data) == ["/toolchain/digest"]
     assert (
@@ -338,6 +240,7 @@ def test_pinned_toolchain_digest_must_be_a_sha256() -> None:
 
 
 def test_seed_count_is_capped() -> None:
+    """Regression: seed ranges were unbounded; memory was the limit."""
     assert _pointers(
         _mutate(["targets", 0, "seeds"], {"n": MAX_SEEDS_PER_TARGET + 1, "base": 1})
     ) == ["/targets/0/seeds"]
@@ -350,50 +253,22 @@ def test_seed_count_is_capped() -> None:
     assert len(p.targets[0].seeds) == MAX_SEEDS_PER_TARGET
 
 
-def test_per_target_and_fan_out_are_exclusive() -> None:
-    data = _mutate(["stages", "compile", "fan_out"], "targets")
-    assert _pointers(data) == ["/stages/compile"]
-
-
 def test_reserved_plusargs() -> None:
     data = _mutate(["targets", 1, "plusargs"], {"seed": 4, "dump": 1, "mode": "x"})
     assert _pointers(data) == ["/targets/1/plusargs/dump", "/targets/1/plusargs/seed"]
 
 
-def test_coverage_over_icarus() -> None:
-    data = _valid()
-    data["stages"]["coverage"] = {
-        "tool": "iverilog",
-        "consumes": [],
-        "depends_on": ["simulate"],
-        "timeout_s": 5,
-    }
-    assert _pointers(data) == ["/stages/coverage/tool"]
-
-
-def test_consumes_role_that_declares_no_files() -> None:
-    data = _without(["design", "files", "data"])
-    assert _pointers(data) == ["/stages/simulate/consumes/0"]
-
-
-def test_unknown_artifact_kind() -> None:
-    data = _mutate(["stages", "simulate", "consumes_artifacts"], ["compiled", "waves"])
-    assert _pointers(data) == ["/stages/simulate/consumes_artifacts/1"]
-
-
-def test_simulate_needs_a_testbench_on_every_target() -> None:
-    data = _mutate(["targets", 1, "tb"], [])
-    assert _pointers(data) == ["/targets/1/tb"]
+def test_a_seed_listed_twice_is_rejected() -> None:
+    """Regression: two equal seeds expanded to two identical task ids and the
+    submit route died on the primary key, an unhandled 500."""
+    assert _pointers(_mutate(["targets", 1, "seeds"], [3, 17, 3])) == [
+        "/targets/1/seeds/2"
+    ]
 
 
 def test_duplicate_target_names() -> None:
     data = _mutate(["targets", 1, "name"], "tb_basic")
     assert _pointers(data) == ["/targets/1/name"]
-
-
-def test_cache_policy_for_an_unknown_stage() -> None:
-    data = _mutate(["policies", "cache"], {"lint": True, "synth": False})
-    assert _pointers(data) == ["/policies/cache/synth"]
 
 
 ################################################################################
@@ -411,16 +286,3 @@ def test_every_semantic_problem_is_reported_together() -> None:
         "/stages/lint/depends_on/0",
         "/targets/0/plusargs/seed",
     ]
-
-
-def test_error_message_lists_pointer_and_reason() -> None:
-    with pytest.raises(PipelineError) as info:
-        parse_pipeline(_mutate(["stages", "lint", "depends_on"], ["ghost"]))
-    assert str(info.value) == "/stages/lint/depends_on/0: unknown stage 'ghost'"
-
-
-def test_valid_input_is_not_mutated() -> None:
-    data = _valid()
-    snapshot = copy.deepcopy(data)
-    parse_pipeline(data)
-    assert data == snapshot

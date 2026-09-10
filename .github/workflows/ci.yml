@@ -26,7 +26,7 @@ jobs:
         run: uv run ruff format --check .
       - name: Types
         run: uv run mypy --strict src tests
-      - name: Unit and fast tiers
-        run: uv run pytest tests/unit tests/fast
+      - name: Unit and fast tiers, with the coverage floor
+        run: uv run pytest tests/unit tests/fast --cov --cov-report=term-missing
       - name: Entry point
         run: uv run rtlfarm --help

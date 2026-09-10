@@ -16,13 +16,8 @@ from pathlib import Path
 import yaml
 from pydantic import ValidationError
 
-from rtlfarm.models import (
-    ARTIFACT_KINDS,
-    RESERVED_PLUSARGS,
-    STAGE_KINDS,
-    Pipeline,
-    Stage,
-)
+from rtlfarm.ids import STAGE_KINDS
+from rtlfarm.models import ARTIFACT_KINDS, RESERVED_PLUSARGS, Pipeline, Stage
 
 PIPELINE_FILENAME = "rtlfarm.yaml"
 
@@ -94,6 +89,13 @@ def _semantic_issues(p: Pipeline) -> Iterable[PipelineIssue]:
             yield PipelineIssue(
                 f"/targets/{i}/plusargs/{key}", "reserved; the runner injects it"
             )
+        # Task ids are built from (target, seed); a repeated seed would collide
+        # on the tasks primary key at submission.
+        for j, seed in enumerate(target.seeds):
+            if seed in target.seeds[:j]:
+                yield PipelineIssue(
+                    f"/targets/{i}/seeds/{j}", f"{seed} is listed twice"
+                )
         if _needs_tb(p.stages) and not target.tb:
             yield PipelineIssue(
                 f"/targets/{i}/tb", "a simulate stage needs a testbench file"

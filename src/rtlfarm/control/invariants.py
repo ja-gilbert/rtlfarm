@@ -4,8 +4,8 @@ The checker reads one snapshot of the database and lists every way the
 recorded state contradicts the state machines. It is run after every fault
 scenario in the test suite and on demand from the CLI, so a mechanism that
 corrupts state fails a test by name instead of surfacing later as a wrong
-result. The invariants that need the scheduler (job aggregates, readiness,
-artifact files) join this module with the milestones that build them.
+result. The missing numbers (job aggregates, readiness, artifact files) need
+the scheduler and land with it.
 
 Invariants checked here:
 
@@ -75,8 +75,7 @@ def check_invariants(conn: sqlite3.Connection) -> list[Violation]:
 def assert_invariants(conn: sqlite3.Connection, clock: Clock) -> None:
     """Raise ``InvariantViolation`` listing every violation, or return quietly.
 
-    ``clock`` is unused by the invariants checked so far; the time-based ones
-    (lease expiry bookkeeping) take it when they land.
+    ``clock`` is unused so far; the time-based invariants will need it.
     """
     violations = check_invariants(conn)
     if violations:

@@ -1,9 +1,7 @@
 """The ``rtlfarm`` command: a thin API client plus developer commands.
 
 Each verb lives in its own module and registers itself on the parser; this
-module holds only the global options and the dispatch. ``control run`` and
-``admin migrate`` operate the control plane; ``dev pack``, ``dev pin-toolchain``
-and ``toolchain manifest`` need no control plane at all.
+module holds only the global options and the dispatch.
 """
 
 from __future__ import annotations

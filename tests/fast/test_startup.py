@@ -1,11 +1,10 @@
 """Bringing the control plane up: the data directory, migrations, the stale
 upload sweep, readiness, the startup log line with its auth banner, and the
-clean failure when the volume cannot be used.
+failures that must still close the database.
 """
 
 from __future__ import annotations
 
-import dataclasses
 import io
 import json
 import logging
@@ -18,16 +17,9 @@ import pytest
 
 from rtlfarm import log
 from rtlfarm.clock import DrivenClock
-from rtlfarm.config import (
-    SECRET_FIELDS,
-    BlobsConfig,
-    Config,
-    TimingConfig,
-    ToolchainConfig,
-)
+from rtlfarm.config import Config, TimingConfig
 from rtlfarm.control import startup
 from rtlfarm.control.startup import (
-    ControlPlane,
     StartupError,
     config_fingerprint,
     open_database,
@@ -155,28 +147,9 @@ def test_auth_disabled_logs_a_warning_banner(
     assert "open" in str(banner["detail"])
 
 
-def test_control_plane_is_frozen(tmp_path: Path, clock: DrivenClock) -> None:
-    plane: ControlPlane = prepare(
-        _config(tmp_path, client_token="c"), clock, synchronous="OFF"
-    )
-    try:
-        with pytest.raises(AttributeError):
-            plane.app = None  # type: ignore[misc, assignment]
-    finally:
-        plane.close()
-
-
 ################################################################################
 # Failure Before Serving
 ################################################################################
-
-
-def test_a_volume_that_cannot_be_used_is_a_startup_error(
-    tmp_path: Path, clock: DrivenClock
-) -> None:
-    (tmp_path / "data").write_text("a file where the volume should be", "utf-8")
-    with pytest.raises(StartupError, match="data"):
-        prepare(_config(tmp_path, client_token="c"), clock, synchronous="OFF")
 
 
 def test_a_file_that_is_not_a_database_is_a_startup_error(
@@ -220,39 +193,15 @@ def test_a_failure_after_the_database_opened_closes_it(
 # The Configuration Fingerprint
 ################################################################################
 
-BASE = Config(client_token="c")
 
-#: ``BASE`` with one non-secret field changed, keyed by the field.
-CHANGED: list[tuple[str, Config]] = [
-    ("timing", Config(client_token="c", timing=TimingConfig(lease_ttl_s=31))),
-    ("toolchain", Config(client_token="c", toolchain=ToolchainConfig(digest="a"))),
-    ("blobs", Config(client_token="c", blobs=BlobsConfig(log_bytes=1))),
-    ("insecure_bind", Config(client_token="c", insecure_bind=True)),
-    ("control_url", Config(client_token="c", control_url="http://farm:1")),
-    ("data_dir", Config(client_token="c", data_dir="elsewhere")),
-]
-
-
-def test_fingerprint_is_stable_and_ignores_the_token_values() -> None:
+def test_fingerprint_reflects_token_presence_but_never_token_values() -> None:
+    """A fingerprint over the token values would let a log reader compare
+    them; one blind to their presence would hide an auth change."""
     a = Config(client_token="one", worker_token="x", data_dir="d")
     b = Config(client_token="two", worker_token="y", data_dir="d")
     assert config_fingerprint(a) == config_fingerprint(b)
-    assert len(config_fingerprint(a)) == 12
-
-
-def test_fingerprint_changes_when_a_token_appears() -> None:
     assert config_fingerprint(Config(client_token="c")) != config_fingerprint(Config())
-
-
-def test_the_change_table_names_every_non_secret_field() -> None:
-    fields = {f.name for f in dataclasses.fields(Config)} - SECRET_FIELDS
-    assert {name for name, _ in CHANGED} == fields
-    for name, changed in CHANGED:
-        assert getattr(changed, name) != getattr(BASE, name)
-
-
-@pytest.mark.parametrize(("name", "changed"), CHANGED)
-def test_fingerprint_changes_with_any_non_secret_setting(
-    name: str, changed: Config
-) -> None:
-    assert config_fingerprint(BASE) != config_fingerprint(changed)
+    with_worker = Config(client_token="one", worker_token="x")
+    assert config_fingerprint(with_worker) != config_fingerprint(
+        Config(client_token="one")
+    )

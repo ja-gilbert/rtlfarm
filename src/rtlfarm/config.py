@@ -2,15 +2,12 @@
 
 Layering, lowest to highest precedence: dataclass defaults → ``rtlfarm.toml``
 (committed, non-secret) → ``RTLFARM_*`` environment (``__`` nests a section,
-``RTLFARM_TIMING__LEASE_TTL_S``) → CLI flags. Everything is loaded once into a
-frozen dataclass. Every timing constant is configuration, never a literal in
-code, and ``validate_timing()`` encodes the orderings the lease,
-heartbeat and kill-grace mechanisms depend on.
+``RTLFARM_TIMING__LEASE_TTL_S``) → CLI flags. Every timing constant is
+configuration, never a literal in code, and ``validate_timing()`` encodes the
+orderings the lease, heartbeat and kill-grace mechanisms depend on.
 
-The loader is deliberately plain: each layer becomes a flat ``{"section.key":
-value}`` mapping, the mappings are merged key by key, and the result is
-poured into the dataclasses. Unknown keys and wrong types are errors, so a
-typo in an environment variable cannot silently leave a default in force.
+Unknown keys and wrong types are errors, so a typo in an environment variable
+cannot silently leave a default in force.
 """
 
 from __future__ import annotations
@@ -48,10 +45,7 @@ class TimingError(ValueError):
 
 @dataclass(frozen=True)
 class TimingConfig:
-    """The farm's timing constants, with the production defaults.
-
-    A garbage-collection grace period joins this section when the sweep exists.
-    """
+    """The farm's timing constants, with the production defaults."""
 
     tick_s: float = 1.0
     heartbeat_s: float = 5.0
@@ -103,9 +97,8 @@ class Config:
     insecure_bind: bool = False
     # Where the CLI (``--url``) and workers find the control plane.
     control_url: str = "http://127.0.0.1:8080"
-    # The control plane's volume: the database and the blob store live under
-    # it. A string, like every leaf the loader knows how to read; callers
-    # wrap it in ``Path`` once.
+    # The database and the blob store live under this. A string, not a Path:
+    # the loader only reads scalar leaves; callers wrap it once.
     data_dir: str = "data"
 
 
@@ -120,10 +113,9 @@ def validate_timing(timing: TimingConfig, timeouts_s: Iterable[float] = ()) -> N
     """Raise ``TimingError`` unless every required ordering of the constants holds.
 
     ``timeouts_s`` are the per-stage wall-clock timeouts of the pipeline in
-    force, when known; without them the two ``timeout_s`` rules are skipped.
-    A caller that knows the stage timeouts (pipeline validation) must pass
-    them, or those two rules are never enforced. All violations are reported
-    in one message.
+    force; without them the two ``timeout_s`` rules are skipped, so a caller
+    that knows them (pipeline validation) must pass them. All violations are
+    reported in one message.
     """
     t = timing
     timeouts = tuple(timeouts_s)

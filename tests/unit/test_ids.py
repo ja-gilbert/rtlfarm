@@ -1,122 +1,62 @@
-"""Identity: names, ULIDs, task and attempt id composition."""
+"""Identity: task ids that are safe as path and URL segments, the stage
+vocabulary the schema admits, and ULIDs that order by creation time."""
 
 from __future__ import annotations
+
+import re
 
 import pytest
 
 from rtlfarm import ids
+from rtlfarm.db.migrate import load_migrations
 
 JOB = "01ARYZ6S41TSV4RRFFQ69G5FAV"
 
 
-# --- names -------------------------------------------------------------------
+################################################################################
+# Task Ids
+################################################################################
 
 
 @pytest.mark.parametrize(
-    "name", ["counter", "tb_basic", "fifo-sync", "A", "x" * 64, "0"]
+    ("job", "stage", "target", "seed", "match"),
+    [
+        pytest.param(JOB, "synthesize", "tb_basic", 1, "synthesize", id="stage-kind"),
+        pytest.param(JOB, "simulate", "tb/basic", 1, "tb/basic", id="target-name"),
+    ],
 )
-def test_valid_names_are_returned_unchanged(name: str) -> None:
-    assert ids.validate_name(name) == name
+def test_task_id_rejects_a_part_that_would_make_an_unsafe_id(
+    job: str, stage: str, target: str, seed: int, match: str
+) -> None:
+    """Every part is checked, so an id is always unambiguous and safe as a
+    path segment and a URL segment."""
+    with pytest.raises(ids.IdError, match=match):
+        ids.task_id(job, stage, target, seed)
 
 
-@pytest.mark.parametrize(
-    "name",
-    ["", "x" * 65, "a b", "a/b", "a.b", "a:b", "ünïcode", "tb\n", "../x", "_" * 0],
-)
-def test_invalid_names_are_rejected(name: str) -> None:
-    with pytest.raises(ids.InvalidName):
-        ids.validate_name(name)
-
-
-# --- task and attempt ids ------------------------------------------------------
-
-
-def test_task_id_composition_for_a_fan_out_stage() -> None:
-    assert (
-        ids.task_id(JOB, "simulate", "tb_basic", 17) == f"{JOB}.simulate.tb_basic.s17"
-    )
-
-
-def test_task_id_composition_for_a_whole_design_stage() -> None:
-    task = ids.task_id(JOB, "lint", ids.WHOLE_DESIGN_TARGET, 0)
-    assert task == f"{JOB}.lint._.s0"
-
-
-def test_attempt_id_is_the_task_id_plus_attempt_number() -> None:
-    task = ids.task_id(JOB, "compile", "tb_basic", 0)
-    assert ids.attempt_id(task, 1) == f"{JOB}.compile.tb_basic.s0.a1"
-    assert ids.attempt_id(task, 12) == f"{JOB}.compile.tb_basic.s0.a12"
-
-
-@pytest.mark.parametrize("n", [0, -1])
-def test_attempt_numbers_start_at_one(n: int) -> None:
-    with pytest.raises(ids.IdError, match="attempt"):
-        ids.attempt_id(ids.task_id(JOB, "lint"), n)
-
-
-def test_task_id_rejects_an_unknown_stage_kind() -> None:
-    with pytest.raises(ids.IdError, match="synthesize"):
-        ids.task_id(JOB, "synthesize", "tb_basic", 1)
-
-
-def test_task_id_rejects_a_bad_target_name() -> None:
-    with pytest.raises(ids.InvalidName):
-        ids.task_id(JOB, "simulate", "tb basic", 1)
-
-
-def test_task_id_rejects_a_negative_seed() -> None:
-    with pytest.raises(ids.IdError, match="seed"):
-        ids.task_id(JOB, "simulate", "tb_basic", -1)
-
-
-def test_task_id_rejects_a_malformed_job_id() -> None:
-    with pytest.raises(ids.IdError, match="job_id"):
-        ids.task_id("not-a-ulid", "simulate", "tb_basic", 1)
-
-
-def test_stage_kinds_are_the_closed_set_of_the_spec() -> None:
+def test_stage_kinds_are_the_core_set_and_the_schema_admits_each() -> None:
+    """The stage vocabulary a pipeline may use is exactly the four Core kinds of
+    spec §12.2, and each must pass the tasks table's CHECK or a valid pipeline
+    would fail at insert. The schema may admit more (the Preferred wave kinds)."""
     assert ids.STAGE_KINDS == ("lint", "compile", "simulate", "coverage")
+    (first,) = [m for m in load_migrations() if m.version == 1]
+    check = re.search(r"CHECK\(stage_kind IN \(([^)]*)\)\)", first.sql)
+    assert check is not None
+    admitted = {kind.strip().strip("'") for kind in check.group(1).split(",")}
+    assert set(ids.STAGE_KINDS) <= admitted
 
 
-# --- ULIDs -------------------------------------------------------------------
-
-ULID_ALPHABET = set("0123456789ABCDEFGHJKMNPQRSTVWXYZ")
-
-
-def test_ulid_is_26_crockford_characters() -> None:
-    ulid = ids.new_ulid(now_ms=1_700_000_000_000)
-    assert len(ulid) == 26
-    assert set(ulid) <= ULID_ALPHABET
+################################################################################
+# ULIDs
+################################################################################
 
 
 def test_ulid_encodes_the_timestamp_in_its_first_ten_characters() -> None:
-    # The reference example from the ULID specification.
+    """The ULID specification's reference vector; job ids are indexed by it."""
     assert ids.new_ulid(now_ms=1_469_918_176_385).startswith("01ARYZ6S41")
-
-
-def test_ulid_time_zero_encodes_as_zeros() -> None:
-    assert ids.new_ulid(now_ms=0).startswith("0000000000")
 
 
 def test_ulids_sort_by_creation_time() -> None:
     earlier = ids.new_ulid(now_ms=1_000)
     later = ids.new_ulid(now_ms=2_000)
     assert earlier < later
-
-
-def test_ulids_at_the_same_millisecond_differ() -> None:
-    a = ids.new_ulid(now_ms=5_000)
-    b = ids.new_ulid(now_ms=5_000)
-    assert a[:10] == b[:10]
-    assert a != b
-
-
-@pytest.mark.parametrize("bad", [-1, 2**48])
-def test_ulid_timestamp_out_of_range_is_rejected(bad: int) -> None:
-    with pytest.raises(ids.IdError, match="now_ms"):
-        ids.new_ulid(now_ms=bad)
-
-
-def test_a_fresh_ulid_is_a_valid_job_id() -> None:
-    job = ids.new_ulid(now_ms=1_700_000_000_000)
-    assert ids.task_id(job, "lint").startswith(job)

@@ -60,17 +60,11 @@ class EventLogger:
             raise ValueError(f"log fields {sorted(reserved)} are reserved")
         self._logger.log(level, event, extra={"fields": fields}, exc_info=exc_info)
 
-    def debug(self, event: str, **fields: object) -> None:
-        self._log(logging.DEBUG, event, fields)
-
     def info(self, event: str, **fields: object) -> None:
         self._log(logging.INFO, event, fields)
 
     def warning(self, event: str, **fields: object) -> None:
         self._log(logging.WARNING, event, fields)
-
-    def error(self, event: str, **fields: object) -> None:
-        self._log(logging.ERROR, event, fields)
 
     def exception(self, event: str, **fields: object) -> None:
         """An ERROR event carrying the traceback of the exception being handled."""

@@ -4,8 +4,7 @@ Layout under the store root::
 
     sha256/ab/abcdef…   immutable bytes, named by their SHA-256
     tmp/<upload_id>     an upload in progress; renamed into place on success
-    trash/<sha256>      quarantine before deletion (the sweep that uses it is
-                        a later milestone; the directory exists from the start)
+    trash/<sha256>      quarantine before deletion; nothing writes here yet
 
 An upload streams through a hasher into ``tmp/`` and is checked as bytes
 arrive: the size against the kind's cap, so chunked transfer encoding cannot

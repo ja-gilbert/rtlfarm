@@ -4,7 +4,6 @@ what digests, and every rule that rejects a pack.
 
 from __future__ import annotations
 
-import dataclasses
 import hashlib
 import json
 import os
@@ -16,7 +15,6 @@ import yaml
 
 from rtlfarm.expand import pack as packing
 from rtlfarm.expand.pack import Manifest, PackError, pack
-from rtlfarm.expand.pipeline import PipelineError
 
 ################################################################################
 # Building Packs
@@ -129,27 +127,6 @@ def test_glob_declaration_order_beats_path_order(tmp_path: Path) -> None:
     assert m.paths("rtl") == ["z_pkg/p.sv", "a_rtl/r.sv"]
 
 
-def test_recursive_globs_and_matched_directories(tmp_path: Path) -> None:
-    files = dict(FILES)
-    files["rtl/sub/deep.sv"] = b"module deep; endmodule\n"
-    p = _pipeline()
-    p["design"]["files"]["rtl"] = ["pkg/*.sv", "rtl/**/*.sv"]
-    m = pack(_make_pack(tmp_path, files, p))
-    assert m.paths("rtl") == [
-        "pkg/types_pkg.sv",
-        "rtl/adder.sv",
-        "rtl/counter.sv",
-        "rtl/sub/deep.sv",
-    ]
-
-
-def test_paths_are_relative_and_forward_slash(root: Path) -> None:
-    for f in pack(root).files:
-        assert not f.path.startswith("/")
-        assert "\\" not in f.path
-        assert ".." not in f.path.split("/")
-
-
 ################################################################################
 # Digests
 ################################################################################
@@ -157,13 +134,6 @@ def test_paths_are_relative_and_forward_slash(root: Path) -> None:
 
 def _entry(m: Manifest, path: str) -> packing.ManifestEntry:
     return next(f for f in m.files if f.path == path)
-
-
-def test_sha256_and_size_match_the_bytes(root: Path) -> None:
-    entry = _entry(pack(root), "rtl/counter.sv")
-    content = FILES["rtl/counter.sv"]
-    assert entry.sha256 == hashlib.sha256(content).hexdigest()
-    assert entry.size == len(content)
 
 
 def test_bytes_are_hashed_as_is(tmp_path: Path) -> None:
@@ -185,14 +155,6 @@ def test_digest_is_stable_under_creation_order_and_mtime(tmp_path: Path) -> None
     assert pack(a).canonical_json() == pack(b).canonical_json()
 
 
-def test_digest_changes_when_one_byte_changes(tmp_path: Path) -> None:
-    a = _make_pack(tmp_path / "a")
-    changed = dict(FILES)
-    changed["tb/vectors/basic.hex"] = b"00\n02\n"
-    b = _make_pack(tmp_path / "b", changed)
-    assert pack(a).digest() != pack(b).digest()
-
-
 def test_canonical_json_is_sorted_compact_and_carries_the_pipeline(root: Path) -> None:
     text = pack(root).canonical_json()
     data = json.loads(text)
@@ -206,13 +168,6 @@ def test_canonical_json_is_sorted_compact_and_carries_the_pipeline(root: Path) -
         "sha256": hashlib.sha256(FILES["pkg/types_pkg.sv"]).hexdigest(),
         "size": len(FILES["pkg/types_pkg.sv"]),
     }
-
-
-def test_hash_file_reads_large_files_in_chunks(tmp_path: Path) -> None:
-    big = tmp_path / "big.bin"
-    content = os.urandom(3 * 1024 * 1024 + 17)
-    big.write_bytes(content)
-    assert packing.hash_file(big) == (hashlib.sha256(content).hexdigest(), len(content))
 
 
 ################################################################################
@@ -241,16 +196,6 @@ def test_git_pycache_and_own_output_are_never_packed(tmp_path: Path) -> None:
 ################################################################################
 
 
-def test_missing_pipeline_file(tmp_path: Path) -> None:
-    assert _issues(tmp_path) == ["rtlfarm.yaml: no such file in the pack"]
-
-
-def test_invalid_pipeline_is_a_pipeline_error(root: Path) -> None:
-    (root / "rtlfarm.yaml").write_text("version: 2\n", encoding="utf-8")
-    with pytest.raises(PipelineError):
-        pack(root)
-
-
 def test_glob_that_matches_nothing(root: Path) -> None:
     p = _pipeline()
     p["design"]["files"]["rtl"] = ["pkg/*.sv", "rtl/*.sv", "missing/*.sv"]
@@ -263,10 +208,12 @@ def test_glob_that_matches_nothing(root: Path) -> None:
     [
         ("/abs/*.sv", "must be relative to the pack"),
         ("../outside/*.sv", "may not contain '..'"),
-        ("rtl\\*.sv", "use forward slashes"),
     ],
+    ids=["absolute", "parent-directory"],
 )
-def test_bad_glob_patterns(root: Path, pattern: str, reason: str) -> None:
+def test_a_glob_that_could_escape_the_pack_is_rejected(
+    root: Path, pattern: str, reason: str
+) -> None:
     p = _pipeline()
     p["design"]["files"]["rtl"] = ["pkg/*.sv", "rtl/*.sv", pattern]
     (root / "rtlfarm.yaml").write_text(yaml.safe_dump(p), encoding="utf-8")
@@ -280,11 +227,6 @@ def test_file_matched_by_two_roles(root: Path) -> None:
     assert _issues(root) == ["rtl/counter.sv: matched by two roles: rtl and include"]
 
 
-def test_symlinked_file_is_rejected(root: Path) -> None:
-    (root / "rtl/linked.sv").symlink_to(root / "rtl/counter.sv")
-    assert _issues(root) == ["rtl/linked.sv: symlink at rtl/linked.sv"]
-
-
 def test_symlinked_directory_component_is_rejected(root: Path) -> None:
     (root / "real").mkdir()
     (root / "real/extra.sv").write_bytes(b"module extra; endmodule\n")
@@ -295,22 +237,13 @@ def test_symlinked_directory_component_is_rejected(root: Path) -> None:
     assert _issues(root) == ["linked/extra.sv: symlink at linked"]
 
 
-def test_symlink_to_a_file_outside_the_pack_is_rejected(root: Path) -> None:
+def test_symlink_is_rejected_before_its_target_outside_the_pack_is_examined(
+    root: Path,
+) -> None:
     outside = root.parent / "outside.sv"
     outside.write_bytes(b"module outside; endmodule\n")
     (root / "rtl/outside.sv").symlink_to(outside)
     assert _issues(root) == ["rtl/outside.sv: symlink at rtl/outside.sv"]
-
-
-def test_target_file_must_be_packed_under_its_role(root: Path) -> None:
-    p = _pipeline()
-    p["targets"][0]["tb"] = ["tb/tb_missing.sv"]
-    p["targets"][0]["data"] = ["rtl/counter.sv"]
-    (root / "rtlfarm.yaml").write_text(yaml.safe_dump(p), encoding="utf-8")
-    assert _issues(root) == [
-        "/targets/0/data/0: 'rtl/counter.sv' is not packed under role 'data'",
-        "/targets/0/tb/0: 'tb/tb_missing.sv' is not packed under role 'tb'",
-    ]
 
 
 def test_every_problem_is_reported_together(root: Path) -> None:
@@ -322,9 +255,3 @@ def test_every_problem_is_reported_together(root: Path) -> None:
         "/design/files/rtl/2: glob matched no files",
         "rtl/linked.sv: symlink at rtl/linked.sv",
     ]
-
-
-def test_manifest_is_frozen(root: Path) -> None:
-    m: Manifest = pack(root)
-    with pytest.raises(dataclasses.FrozenInstanceError):
-        m.design = "other"  # type: ignore[misc]

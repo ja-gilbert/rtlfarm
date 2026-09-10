@@ -1,12 +1,9 @@
 """Bringing a control plane up: the steps between configuration and serving.
 
-``open_database`` creates the data directory, opens the database in it and
-applies pending migrations; ``rtlfarm admin migrate`` stops there.
-``prepare`` goes on to everything else that must be true before the first
-request and that a test can check without a socket: stale uploads are swept,
-the application is built, readiness is set, and the startup line and the
-auth banner are logged. ``rtlfarm control run`` calls it and then hands the
-application to the HTTP server.
+``open_database`` is where ``rtlfarm admin migrate`` stops. ``prepare`` goes
+on to everything else that must be true before the first request and that a
+test can check without a socket; ``rtlfarm control run`` calls it and then
+hands the application to the HTTP server.
 """
 
 from __future__ import annotations

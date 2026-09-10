@@ -26,9 +26,6 @@ Role = Literal["rtl", "include", "tb", "data"]
 TOOLS: tuple[str, ...] = ("fake", "iverilog")
 Tool = Literal["fake", "iverilog"]
 
-#: The stage kinds of the Core pipeline; the stage name is its kind.
-STAGE_KINDS: tuple[str, ...] = ("lint", "compile", "simulate", "coverage")
-
 #: The upstream artifact kinds a stage may consume.
 ARTIFACT_KINDS: tuple[str, ...] = ("compiled",)
 

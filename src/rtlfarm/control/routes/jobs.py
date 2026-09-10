@@ -1,12 +1,11 @@
 """Submission and the read routes for jobs and tasks.
 
 ``POST /v1/jobs`` is the one write: it validates the manifest and pipeline
-with pointers, resolves the toolchain digest (body, then pipeline, then the
-control plane's own pin), checks every input blob is present, expands the
-task graph, and writes the job, its inputs, tasks, dependencies and first
-events in one transaction. Nothing is written before every check has passed,
-so a rejected submission leaves no trace, and a crash inside the transaction
-leaves none either.
+with pointers, resolves the toolchain digest, checks every input blob is
+present, expands the task graph, and writes the job, its inputs, tasks,
+dependencies and first events in one transaction. Nothing is written before
+every check has passed, so a rejected submission leaves no trace, and a crash
+inside the transaction leaves none either.
 
 An ``Idempotency-Key`` makes a retried submission return the original job
 instead of a second one; the same key with different work is a conflict.

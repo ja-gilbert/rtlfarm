@@ -74,9 +74,3 @@ def as_client() -> dict[str, str]:
 def as_worker() -> dict[str, str]:
     """Headers that present the worker token."""
     return {"Authorization": f"Bearer {WORKER_TOKEN}"}
-
-
-@pytest.fixture
-def tokens() -> tuple[str, str]:
-    """The (client, worker) tokens the app fixture is configured with."""
-    return CLIENT_TOKEN, WORKER_TOKEN

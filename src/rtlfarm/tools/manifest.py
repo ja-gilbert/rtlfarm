@@ -7,9 +7,8 @@ reports: change any recorded component and the digest changes, which makes a
 tool upgrade a cold cache by design rather than a silent difference.
 
 Recorded: the base OS from ``/etc/os-release`` (a container cannot learn its
-own image digest, so none is recorded), the Python interpreter, the fake tool
-that ships inside this package, and each simulator found on ``PATH``, with
-its version line, path and binary digest.
+own image digest, so none is recorded), the Python interpreter, the packaged
+fake tool, and each simulator found on ``PATH``.
 """
 
 from __future__ import annotations

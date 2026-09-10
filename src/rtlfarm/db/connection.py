@@ -1,22 +1,16 @@
 """Opening SQLite connections the way the control plane needs them.
 
 Every connection is opened in autocommit mode, so the ``sqlite3`` module never
-begins a transaction on its own. Transactions are controlled only by explicit
+begins a transaction on its own; ``Connection.commit()`` and ``rollback()``
+are no-ops and are never called. Transactions are controlled only by explicit
 SQL: a write path issues ``BEGIN IMMEDIATE`` and ends with ``COMMIT`` or
-``ROLLBACK``; ``Connection.commit()`` and ``Connection.rollback()`` are never
-called (they are no-ops in this mode). This is what makes "one transaction per
-migration" and "one transaction per scheduler step" true by construction.
+``ROLLBACK``, which is what makes "one transaction per migration" and "one
+transaction per scheduler step" true by construction.
 
-The pragmas set here are the operating parameters of the database file, not
-scheduler timing: write-ahead logging so readers never block the writer,
-foreign keys enforced, a busy timeout so a second process waits instead of
-failing at once, an explicit page cache, and the durability level chosen by
-the caller.
-
-``Database`` is the control plane's handle: one writer connection used only
-inside ``write()``, which serializes writers with an asyncio lock and owns the
-``BEGIN IMMEDIATE`` … ``COMMIT``; readers get their own read-only connections
-so they never observe an open write.
+The pragmas set here are operating parameters of the database file, not
+scheduler timing: WAL so readers never block the writer, foreign keys on, a
+busy timeout so a second process waits instead of failing at once, a page
+cache, and the caller's durability level.
 """
 
 from __future__ import annotations
@@ -39,7 +33,9 @@ CACHE_SIZE = -16_000
 
 #: How long a connection waits for a lock held by another process before
 #: raising ``sqlite3.OperationalError``. A SQLite driver parameter, not a
-#: scheduler timing constant.
+#: scheduler timing constant. It equals ``sqlite3.connect``'s own default;
+#: the pragma is issued anyway so the value lives with the other pragmas
+#: instead of in a driver default nobody reads.
 BUSY_TIMEOUT_MS = 5_000
 
 #: ``NORMAL`` for a real database, ``OFF`` for a throwaway test database,
@@ -53,15 +49,14 @@ class SqliteVersionError(RuntimeError):
     """The linked SQLite library is older than ``MIN_SQLITE_VERSION``."""
 
 
-def check_sqlite_version() -> tuple[int, int, int]:
-    """Return the linked SQLite version, or raise if it is below the floor."""
+def check_sqlite_version() -> None:
+    """Raise unless the linked SQLite meets the floor."""
     version = sqlite3.sqlite_version_info
     if version < MIN_SQLITE_VERSION:
         floor = ".".join(str(part) for part in MIN_SQLITE_VERSION)
         raise SqliteVersionError(
             f"SQLite {sqlite3.sqlite_version} is too old; {floor} or newer is required"
         )
-    return version
 
 
 def open_connection(
@@ -111,8 +106,7 @@ def execute_returning(
     """Run a statement with ``RETURNING`` and drain it before anything else runs.
 
     SQLite forbids modifying the database while a ``RETURNING`` statement is
-    still being stepped, so the rows are fetched to exhaustion here and the
-    caller gets a plain list.
+    still being stepped, so the rows are fetched to exhaustion here.
     """
     rows: list[tuple[object, ...]] = conn.execute(sql, params).fetchall()
     return rows
