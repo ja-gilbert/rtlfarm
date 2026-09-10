@@ -38,7 +38,9 @@ def _insert(conn: sqlite3.Connection, table: str, row: dict[str, object]) -> Non
     conn.execute(f"INSERT INTO {table} ({columns}) VALUES ({placeholders})", row)
 
 
-def _insert_job(conn: sqlite3.Connection, job_id: str = "job-1") -> None:
+def _insert_job(
+    conn: sqlite3.Connection, job_id: str = "job-1", **overrides: object
+) -> None:
     _insert(
         conn,
         "jobs",
@@ -54,6 +56,7 @@ def _insert_job(conn: sqlite3.Connection, job_id: str = "job-1") -> None:
             "state": "SUBMITTED",
             "n_tasks": 1,
             "created_at_ms": 1_000,
+            **overrides,
         },
     )
 
@@ -205,6 +208,21 @@ def test_unknown_task_state_is_rejected(db: sqlite3.Connection) -> None:
 
 
 ################################################################################
+# One Job per Idempotency Key
+################################################################################
+
+
+def test_two_jobs_with_the_same_idempotency_key_are_rejected(
+    db: sqlite3.Connection,
+) -> None:
+    """The last resort behind replay: a race that slipped past the read in
+    submit could otherwise file two jobs for one key."""
+    _insert_job(db, "job-1", idempotency_key="k")
+    with pytest.raises(sqlite3.IntegrityError, match="UNIQUE constraint failed"):
+        _insert_job(db, "job-2", idempotency_key="k")
+
+
+################################################################################
 # One COMMITTED Attempt per Task
 ################################################################################
 
@@ -258,6 +276,7 @@ def test_pragmas_and_wal(db: sqlite3.Connection) -> None:
 
     assert pragma("journal_mode") == "wal"
     assert pragma("synchronous") == 1  # NORMAL, the default for a real database
+    assert pragma("busy_timeout") == connection.BUSY_TIMEOUT_MS
     assert pragma("cache_size") == connection.CACHE_SIZE
 
 

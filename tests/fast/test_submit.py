@@ -170,6 +170,33 @@ async def test_task_rows_carry_params_and_budgets(
     assert row[1:] == (30, 1, 3, 0, 1, 1, 1)
 
 
+async def test_compilation_order_follows_the_ordinals_not_the_wire_order(
+    client: httpx.AsyncClient,
+    as_client: dict[str, str],
+    uploaded: Manifest,
+    db: Database,
+) -> None:
+    """A client that lists the files in any order must still get the pack's
+    compile order; every packed manifest arrives sorted, so nothing else
+    exercises the sort at submission."""
+    body = _body(uploaded)
+    body["manifest"]["files"] = list(reversed(body["manifest"]["files"]))
+    response = await client.post("/v1/jobs", json=body, headers=as_client)
+    assert response.status_code == 201, response.text
+    job_id = response.json()["job_id"]
+    stored = _rows(
+        db,
+        "SELECT role, ordinal, path FROM job_inputs WHERE job_id = ? ORDER BY rowid",
+        job_id,
+    )
+    assert stored == [(f.role, f.ordinal, f.path) for f in uploaded.files]
+    detail = (
+        await client.get(f"/v1/tasks/{job_id}.compile.t_a.s0", headers=as_client)
+    ).json()
+    rtl = [f.path for f in uploaded.files if f.role == "rtl"]
+    assert detail["params"]["inputs"] == [*rtl, "tb/t_a.txt"]
+
+
 async def test_missing_blobs_lists_exactly_the_absent_digests(
     client: httpx.AsyncClient,
     as_client: dict[str, str],
