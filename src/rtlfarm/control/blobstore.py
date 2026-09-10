@@ -104,6 +104,7 @@ class BlobStore:
     def __init__(self, root: Path, caps: BlobsConfig, *, fsync: bool = False) -> None:
         self.root = root
         self.caps = caps
+        # Only the prod overlay turns fsync on (spec §13.3); nothing passes it yet.
         self.fsync = fsync
         for name in ("sha256", "tmp", "trash"):
             (root / name).mkdir(parents=True, exist_ok=True)
@@ -116,7 +117,10 @@ class BlobStore:
         return self.path_for(sha256).is_file()
 
     def size(self, sha256: str) -> int | None:
-        """The stored size, or ``None`` when the file is absent."""
+        """The stored size, or ``None`` when the file is absent.
+
+        Nothing calls this until the existence-and-size pre-check of spec §14.6.
+        """
         try:
             return self.path_for(sha256).stat().st_size
         except FileNotFoundError:

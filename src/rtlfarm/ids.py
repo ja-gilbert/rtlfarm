@@ -75,7 +75,10 @@ def task_id(
 
 
 def attempt_id(task: str, attempt: int) -> str:
-    """``{task_id}.a{n}``, ``n`` 1-based; the fencing token."""
+    """``{task_id}.a{n}``, ``n`` 1-based; the fencing token.
+
+    Minted by the claim (spec §4.6, §7.3); nothing calls this until then.
+    """
     if attempt < 1:
         raise IdError(f"attempt {attempt} must be 1 or greater")
     return f"{task}.a{attempt}"

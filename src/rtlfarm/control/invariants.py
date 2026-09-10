@@ -31,7 +31,6 @@ from rtlfarm.clock import Clock
 TERMINAL_STATES: frozenset[str] = frozenset(
     {"SUCCEEDED", "FAILED", "TIMED_OUT", "INFRA_FAILED", "SKIPPED", "CANCELED"}
 )
-LEASED_STATES: frozenset[str] = frozenset({"LEASED", "RUNNING"})
 
 
 @dataclass(frozen=True)

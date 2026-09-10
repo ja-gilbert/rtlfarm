@@ -106,7 +106,9 @@ class Config:
 SECRET_FIELDS: frozenset[str] = frozenset({"client_token", "worker_token"})
 
 
-# --- validate_timing ---------------------------------------------------------
+################################################################################
+# validate_timing
+################################################################################
 
 
 def validate_timing(timing: TimingConfig, timeouts_s: Iterable[float] = ()) -> None:
@@ -196,7 +198,9 @@ def validate_timing(timing: TimingConfig, timeouts_s: Iterable[float] = ()) -> N
         raise TimingError("; ".join(failures))
 
 
-# --- loading ------------------------------------------------------------------
+################################################################################
+# Loading
+################################################################################
 
 _Flat = dict[str, object]
 
